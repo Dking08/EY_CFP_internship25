@@ -40,9 +40,9 @@
 
 * **Formula**:
 
-  $$
+  ```math
   \text{Gross Profit} = \text{Net Sales Revenue (EUR)} - \text{COGS (EUR)}
-  $$
+  ```
 * **Why Useful?** Shows how much money is left after covering the direct costs of goods.
 * **Implementation**: Simple subtraction.
 
@@ -52,9 +52,9 @@
 
 * **Formula**:
 
-  $$
+  ```math
   \text{Gross Profit Margin} = \frac{\text{Gross Profit}}{\text{Net Sales Revenue (EUR)}} \times 100
-  $$
+  ```
 * **Why Useful?** Evaluates profitability efficiency.
 * **Implementation**: Division + percentage.
 
@@ -64,9 +64,9 @@
 
 * **Formula**:
 
-  $$
+  ```math
   \text{ASP} = \frac{\text{Net Sales Revenue (EUR)}}{\text{Net Sales Volume (Litres)}}
-  $$
+  ``
 * **Why Useful?** Helps see pricing strategy effectiveness.
 * **Implementation**: Revenue ÷ Volume.
 
@@ -76,9 +76,9 @@
 
 * **Formula**:
 
-  $$
+  ```math
   \text{COGS per Litre} = \frac{\text{COGS (EUR)}}{\text{Net Sales Volume (Litres)}}
-  $$
+  ```
 * **Why Useful?** Reveals production/distribution efficiency.
 * **Implementation**: COGS ÷ Volume.
 
@@ -88,9 +88,9 @@
 
 * **Formula**:
 
-  $$
+  ```math
   \text{Marketing Spend Ratio} = \frac{\text{Marketing Spend (EUR)}}{\text{Net Sales Revenue (EUR)}} \times 100
-  $$
+  ```
 * **Why Useful?** Tracks marketing efficiency relative to revenue.
 * **Implementation**: Spend ÷ Revenue.
 
@@ -101,9 +101,9 @@
 * **Formula**:
   Compare **average sales during promotional events** vs. **non-promotional periods**:
 
-  $$
+  ```math
   \text{Impact} = \frac{\text{Avg. Promo Sales} - \text{Avg. Non-Promo Sales}}{\text{Avg. Non-Promo Sales}} \times 100
-  $$
+  ```
 * **Why Useful?** Measures effectiveness of promotions.
 * **Implementation**: Group by `Promotional_Event`.
 
@@ -122,9 +122,9 @@
 
 * **Formula**:
 
-  $$
+  ```math
   \text{Lift} = \frac{\text{Avg. Sales on Holidays} - \text{Avg. Sales on Normal Days}}{\text{Avg. Sales on Normal Days}} \times 100
-  $$
+  ```
 * **Why Useful?** Shows effect of holidays on sales.
 * **Implementation**: Filter on `Holiday_Indicator`.
 
@@ -163,9 +163,9 @@
 
 * **Formula**:
 
-  $$
+  ```math
   \text{ROMI} = \frac{\text{Incremental Sales from Marketing}}{\text{Marketing Spend (EUR)}}
-  $$
+  ```
 * **Why Useful?** Links marketing to real ROI.
 * **Implementation**: Compare with/without marketing periods.
 
@@ -175,9 +175,9 @@
 
 * Since we don’t have full financials (tax, depreciation, working capital), we approximate:
 
-  $$
+  ```math
   \text{OCF} \approx \text{Gross Profit} - \text{Marketing Spend (EUR)}
-  $$
+  ```
 * **Why Useful?** Provides a simplified cash flow view.
 * **Implementation**: Derived KPI.
 
