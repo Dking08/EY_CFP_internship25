@@ -17,23 +17,23 @@ class AccuracyTester:
     """
     Comprehensive testing framework for evaluating AlcoBev forecasting model accuracy
     """
-    
+
     def __init__(self, data_file='alcobev_europe_sales_data.csv', models_dir='models'):
         self.data_file = data_file
         self.models_dir = models_dir
         self.sales_model_path = os.path.join(models_dir, 'sales_forecasting_model.pkl')
         self.cogs_model_path = os.path.join(models_dir, 'cogs_forecasting_model.pkl')
-        
+
         # Load data and models
         self.df = None
         self.sales_pipeline = None
         self.cogs_pipeline = None
         self.test_results = {}
-        
+
     def load_data_and_models(self):
         """Load the dataset and trained models"""
         print("Loading data and models...")
-        
+
         # Load data
         try:
             self.df = pd.read_csv(self.data_file)
@@ -41,7 +41,7 @@ class AccuracyTester:
             print(f"✓ Data loaded: {len(self.df)} records")
         except FileNotFoundError:
             raise FileNotFoundError(f"Data file {self.data_file} not found. Run generate_data.py first.")
-        
+
         # Load models
         try:
             if os.path.exists(self.sales_model_path):
@@ -49,35 +49,35 @@ class AccuracyTester:
                 print("✓ Sales model loaded successfully")
             else:
                 raise FileNotFoundError(f"Sales model not found at {self.sales_model_path}")
-                
+
             if os.path.exists(self.cogs_model_path):
                 self.cogs_pipeline = joblib.load(self.cogs_model_path)
                 print("✓ COGS model loaded successfully")
             else:
                 raise FileNotFoundError(f"COGS model not found at {self.cogs_model_path}")
-                
+
         except Exception as e:
             raise Exception(f"Error loading models: {e}")
-    
+
     def prepare_features(self, df):
         """Prepare features for prediction (same as in training)"""
         df = df.copy()
-        
+
         # Create time-based features
         df['day_of_week'] = df['Date'].dt.dayofweek
         df['month'] = df['Date'].dt.month
         df['year'] = df['Date'].dt.year
         df['day_of_year'] = df['Date'].dt.dayofyear
         df['week_of_year'] = df['Date'].dt.isocalendar().week.astype(int)
-        
+
         # Create lagged features
         df = df.sort_values(by=['Country', 'Channel', 'Product_Category', 'Date'])
         df['Net_Sales_Revenue_EUR_lag1'] = df.groupby(['Country', 'Channel', 'Product_Category'])['Net_Sales_Revenue_EUR'].shift(1)
         df['COGS_EUR_lag1'] = df.groupby(['Country', 'Channel', 'Product_Category'])['COGS_EUR'].shift(1)
-        
+
         # Drop rows with NaNs
         df.dropna(inplace=True)
-        
+
         # Define feature order (must match training)
         feature_order = [
             'Net_Sales_Volume_Litres', 'Marketing_Spend_EUR', 'Promotional_Event',
@@ -87,9 +87,9 @@ class AccuracyTester:
             'Net_Sales_Revenue_EUR_lag1', 'COGS_EUR_lag1',
             'Country', 'Channel', 'Product_Category'
         ]
-        
+
         return df[feature_order + ['Net_Sales_Revenue_EUR', 'COGS_EUR', 'Date']]
-    
+
     def calculate_metrics(self, y_true, y_pred, model_name):
         """Calculate comprehensive accuracy metrics"""
         metrics = {
@@ -102,46 +102,46 @@ class AccuracyTester:
             'Std_Actual': np.std(y_true),
             'Std_Predicted': np.std(y_pred)
         }
-        
+
         # Additional custom metrics
         metrics['Bias'] = np.mean(y_pred - y_true)  # Average prediction bias
         metrics['Bias_Percentage'] = (metrics['Bias'] / metrics['Mean_Actual']) * 100
         metrics['Accuracy_90'] = np.mean(np.abs((y_true - y_pred) / y_true) <= 0.1) * 100  # % within 10%
         metrics['Accuracy_80'] = np.mean(np.abs((y_true - y_pred) / y_true) <= 0.2) * 100  # % within 20%
-        
+
         return metrics
-    
+
     def test_holdout_accuracy(self, test_split_date='2024-01-01'):
         """Test accuracy on holdout test set"""
         print(f"\n=== HOLDOUT TEST ACCURACY (Test data from {test_split_date}) ===")
-        
+
         # Prepare data
         df_prepared = self.prepare_features(self.df)
         test_split_date = pd.to_datetime(test_split_date)
-        
+
         # Split data
         test_df = df_prepared[df_prepared['Date'] >= test_split_date].copy()
-        
+
         if len(test_df) == 0:
             print("❌ No test data available for the specified date")
             return
-        
+
         print(f"Test set size: {len(test_df)} records")
-        
+
         # Prepare features and targets
         feature_cols = [col for col in test_df.columns if col not in ['Net_Sales_Revenue_EUR', 'COGS_EUR', 'Date']]
         X_test = test_df[feature_cols]
         y_test_sales = test_df['Net_Sales_Revenue_EUR']
         y_test_cogs = test_df['COGS_EUR']
-        
+
         # Make predictions
         y_pred_sales = self.sales_pipeline.predict(X_test)
         y_pred_cogs = self.cogs_pipeline.predict(X_test)
-        
+
         # Calculate metrics
         sales_metrics = self.calculate_metrics(y_test_sales, y_pred_sales, 'Sales')
         cogs_metrics = self.calculate_metrics(y_test_cogs, y_pred_cogs, 'COGS')
-        
+
         # Store results
         self.test_results['holdout'] = {
             'sales': sales_metrics,
@@ -152,19 +152,19 @@ class AccuracyTester:
                 'cogs': y_pred_cogs
             }
         }
-        
+
         # Print results
         self.print_metrics_table(sales_metrics, cogs_metrics, "HOLDOUT TEST")
-        
+
         return sales_metrics, cogs_metrics
-    
+
     def test_rolling_window_accuracy(self, window_days=30, n_windows=5):
         """Test accuracy using rolling windows"""
         print(f"\n=== ROLLING WINDOW ACCURACY ({n_windows} windows of {window_days} days) ===")
-        
+
         df_prepared = self.prepare_features(self.df)
         df_prepared = df_prepared.sort_values('Date')
-        
+
         # Get the last n_windows worth of data
         end_date = df_prepared['Date'].max()
         start_date = end_date - timedelta(days=window_days * n_windows)
