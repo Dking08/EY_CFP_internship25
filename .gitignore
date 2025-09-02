@@ -3,3 +3,5 @@ __pycache__
 *.zip
 *.code-workspace
 __temp__
+dynamic_engine/dynamic_models
+venv/
