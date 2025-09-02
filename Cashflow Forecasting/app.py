@@ -19,10 +19,12 @@ app = FastAPI(
 MODELS_DIR = 'models'
 SALES_MODEL_PATH = os.path.join(MODELS_DIR, 'sales_forecasting_model.pkl')
 COGS_MODEL_PATH = os.path.join(MODELS_DIR, 'cogs_forecasting_model.pkl')
+VOLUME_MODEL_PATH = os.path.join(MODELS_DIR, 'volume_forecasting_model.pkl')
 
 # Model pipelines
 sales_pipeline = None
 cogs_pipeline = None
+volume_pipeline = None
 
 # Define the exact order of input features expected by the models
 INPUT_FEATURES_ORDER = [
@@ -33,6 +35,14 @@ INPUT_FEATURES_ORDER = [
     'Net_Sales_Revenue_EUR_lag1', 'COGS_EUR_lag1',
     'Country', 'Channel', 'Product_Category'
 ]
+VOLUME_FEATURES = [
+    'Marketing_Spend_EUR', 'Promotional_Event',
+    'Consumer_Confidence_Index', 'Inflation_Rate_EUR', 'Avg_Temp_C',
+    'Holiday_Indicator', 'Competitor_Activity_Index',
+    'day_of_week', 'month', 'year', 'day_of_year', 'week_of_year',
+    'Net_Sales_Volume_Litres_lag1',
+    'Country', 'Channel', 'Product_Category'
+] # 13 numerical features
 
 # --- KPI Calculation Functions ---
 def calculate_kpis(
@@ -73,7 +83,7 @@ def calculate_kpis(
 # Load models on startup
 @app.on_event("startup")
 async def load_assets():
-    global sales_pipeline, cogs_pipeline
+    global sales_pipeline, cogs_pipeline, volume_pipeline
     try:
         if os.path.exists(SALES_MODEL_PATH):
             sales_pipeline = joblib.load(SALES_MODEL_PATH)
@@ -89,10 +99,18 @@ async def load_assets():
         else:
             print(f"COGS model not found at {COGS_MODEL_PATH}. Using dummy predictions.")
 
+        if os.path.exists(VOLUME_MODEL_PATH):
+            volume_pipeline = joblib.load(VOLUME_MODEL_PATH)
+            print(f"Successfully loaded volume pipeline from {VOLUME_MODEL_PATH}")
+            print(f"Volume pipeline expects {volume_pipeline.named_steps['preprocessor'].n_features_in_} features")
+        else:
+            print(f"Volume model not found at {VOLUME_MODEL_PATH}. Using dummy predictions.")
+
     except Exception as e:
         print(f"Error loading assets: {e}. Using dummy predictions.")
         sales_pipeline = None
         cogs_pipeline = None
+        volume_pipeline = None
 
 # --- Pydantic Models ---
 class ForecastRequest(BaseModel):
@@ -187,6 +205,7 @@ def generate_mock_future_data(request: ForecastRequest) -> pd.DataFrame:
         # Lagged features - use fixed placeholders for POC
         mock_net_sales_revenue_lag1 = 300000
         mock_cogs_lag1 = 120000
+        mock_sales_volume_litres_lag1 = mock_sales_volume_litres * 0.95 + random.uniform(-500, 500)
 
         data.append({
             'Date': d,
@@ -202,7 +221,8 @@ def generate_mock_future_data(request: ForecastRequest) -> pd.DataFrame:
             'Holiday_Indicator': mock_holiday,
             'Competitor_Activity_Index': mock_comp_act,
             'Net_Sales_Revenue_EUR_lag1': mock_net_sales_revenue_lag1,
-            'COGS_EUR_lag1': mock_cogs_lag1
+            'COGS_EUR_lag1': mock_cogs_lag1,
+            'Net_Sales_Volume_Litres_lag1': mock_sales_volume_litres_lag1
         })
 
     df = pd.DataFrame(data)
@@ -223,6 +243,23 @@ def prepare_features_for_prediction(df: pd.DataFrame) -> pd.DataFrame:
 
     if len(feature_df.columns) != 18:
         raise ValueError(f"Feature mismatch: expected 18 features, got {len(feature_df.columns)}")
+
+    return feature_df
+
+def prepare_volume_features_for_prediction(df: pd.DataFrame) -> pd.DataFrame:
+    """Prepare features for volume prediction by the volume pipeline."""
+    # Create time-based features
+    df['day_of_week'] = df['Date'].dt.dayofweek
+    df['month'] = df['Date'].dt.month
+    df['year'] = df['Date'].dt.year
+    df['day_of_year'] = df['Date'].dt.dayofyear
+    df['week_of_year'] = df['Date'].dt.isocalendar().week.astype(int)
+
+    # Select features in correct order
+    feature_df = df[VOLUME_FEATURES].copy()
+
+    if len(feature_df.columns) != 16:
+        raise ValueError(f"Volume feature mismatch: expected 16 features, got {len(feature_df.columns)}")
 
     return feature_df
 
@@ -313,7 +350,8 @@ async def health_check():
         "status": "healthy",
         "models_loaded": {
             "sales_pipeline": sales_pipeline is not None,
-            "cogs_pipeline": cogs_pipeline is not None
+            "cogs_pipeline": cogs_pipeline is not None,
+            "volume_pipeline": volume_pipeline is not None
         },
         "timestamp": pd.Timestamp.now().isoformat()
     }
@@ -332,14 +370,17 @@ async def get_daily_forecasts(request: ForecastRequest):
 
         predicted_sales = []
         predicted_cogs = []
+        predicted_volume = []
 
-        if sales_pipeline and cogs_pipeline:
+        if sales_pipeline and cogs_pipeline and volume_pipeline:
             # Use trained pipelines
             feature_df = prepare_features_for_prediction(future_df_raw.copy())
+            feature_df_volume = prepare_volume_features_for_prediction(future_df_raw.copy())
 
             try:
                 predicted_sales = sales_pipeline.predict(feature_df).tolist()
                 predicted_cogs = cogs_pipeline.predict(feature_df).tolist()
+                predicted_volume = volume_pipeline.predict(feature_df_volume).tolist()
                 print("[DEBUG] Successfully used trained pipelines for prediction")
             except Exception as e:
                 print(f"Error during pipeline prediction: {e}")
@@ -368,13 +409,15 @@ async def get_daily_forecasts(request: ForecastRequest):
 
                 predicted_sales.append(max(0, sales_val))
                 predicted_cogs.append(max(0, cogs_val))
+                predicted_volume.append(max(0, row['Net_Sales_Volume_Litres']))
 
         # Build daily forecast responses with KPIs
         daily_forecasts = []
         for i, row in future_df_raw.iterrows():
             sales = predicted_sales[i]
             cogs = predicted_cogs[i]
-            volume = row['Net_Sales_Volume_Litres']
+            # volume = row['Net_Sales_Volume_Litres']
+            volume = predicted_volume[i]
             marketing = row['Marketing_Spend_EUR']
 
             # Calculate KPIs
