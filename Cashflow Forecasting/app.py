@@ -84,6 +84,9 @@ def calculate_business_kpis(
     # 4. Operating Cash Flow (EUR) - after marketing spend
     operating_cash_flow = sales_revenue - cogs - marketing
 
+    # 5. COGS per Litre (EUR)
+    cogs_per_litre = (cogs / volume_litres) if volume_litres > 0 else 0
+
     # Additional validation - ensure realistic ranges
     gross_profit_margin = max(-100, min(100, gross_profit_margin))  # Cap at realistic range
 
@@ -91,7 +94,8 @@ def calculate_business_kpis(
         'gross_profit_eur': round(gross_profit, 2),
         'gross_profit_margin_pct': round(gross_profit_margin, 2),
         'asp_per_litre_eur': round(asp_per_litre, 2),
-        'predicted_operating_cash_flow_eur': round(operating_cash_flow, 2)
+        'predicted_operating_cash_flow_eur': round(operating_cash_flow, 2),
+        'cogs_per_litre_eur': round(cogs_per_litre, 2)
     }
 
 def calculate_additional_metrics(
@@ -108,8 +112,7 @@ def calculate_additional_metrics(
     volume_litres = max(0, float(volume_litres))
 
     return {
-        'cogs_ratio_pct': round((cogs / sales_revenue * 100) if sales_revenue > 0 else 0, 2),
-        'cost_per_litre_eur': round((cogs / volume_litres) if volume_litres > 0 else 0, 2)
+        'cogs_ratio_pct': round((cogs / sales_revenue * 100) if sales_revenue > 0 else 0, 2)
     }
 
 # Load models on startup
@@ -166,6 +169,7 @@ class DailyForecastResponse(BaseModel):
     gross_profit_margin_pct: float
     asp_per_litre_eur: float
     predicted_operating_cash_flow_eur: float
+    cogs_per_litre: float
 
 class ForecastSummary(BaseModel):
     """Summary statistics for the forecast period."""
@@ -186,6 +190,7 @@ class ForecastSummary(BaseModel):
     avg_daily_gross_profit_eur: float
     avg_gross_profit_margin_pct: float
     avg_asp_per_litre_eur: float
+    avg_cogs_per_litre: float
 
     # Performance metrics
     best_day_sales: Dict[str, Any]
@@ -323,6 +328,7 @@ def create_forecast_summary(daily_forecasts: List[DailyForecastResponse],
         avg_daily_gross_profit = total_gross_profit / num_days
         avg_gross_profit_margin = (total_gross_profit / total_sales * 100) if total_sales > 0 else 0
         avg_asp = (total_sales / total_volume) if total_volume > 0 else 0
+        avg_cogs_per_litre = (total_cogs / total_volume) if total_volume > 0 else 0
 
         # Find best/worst performing days
         best_day = max(daily_forecasts, key=lambda x: x.predicted_sales_revenue_eur)
@@ -345,27 +351,33 @@ def create_forecast_summary(daily_forecasts: List[DailyForecastResponse],
             avg_daily_gross_profit_eur=round(avg_daily_gross_profit, 2),
             avg_gross_profit_margin_pct=round(avg_gross_profit_margin, 2),
             avg_asp_per_litre_eur=round(avg_asp, 2),
+            avg_cogs_per_litre=round(avg_cogs_per_litre, 2),
 
             best_day_sales={
                 "date": best_day.forecast_date,
                 "sales_revenue_eur": best_day.predicted_sales_revenue_eur,
                 "gross_profit_eur": best_day.gross_profit_eur,
                 "gross_profit_margin_pct": best_day.gross_profit_margin_pct,
-                "predicted_operating_cash_flow_eur": best_day.predicted_operating_cash_flow_eur
+                "predicted_operating_cash_flow_eur": best_day.predicted_operating_cash_flow_eur,
+                "asp_per_litre_eur": best_day.asp_per_litre_eur,
+                "cogs_per_litre": best_day.cogs_per_litre
             },
             worst_day_sales={
                 "date": worst_day.forecast_date,
                 "sales_revenue_eur": worst_day.predicted_sales_revenue_eur,
                 "gross_profit_eur": worst_day.gross_profit_eur,
                 "gross_profit_margin_pct": worst_day.gross_profit_margin_pct,
-                "predicted_operating_cash_flow_eur": worst_day.predicted_operating_cash_flow_eur
+                "predicted_operating_cash_flow_eur": worst_day.predicted_operating_cash_flow_eur,
+                "asp_per_litre_eur": worst_day.asp_per_litre_eur,
+                "cogs_per_litre": worst_day.cogs_per_litre
             },
             highest_margin_day={
                 "date": highest_margin_day.forecast_date,
                 "gross_profit_margin_pct": highest_margin_day.gross_profit_margin_pct,
                 "sales_revenue_eur": highest_margin_day.predicted_sales_revenue_eur,
+                "predicted_operating_cash_flow_eur": highest_margin_day.predicted_operating_cash_flow_eur,
                 "asp_per_litre_eur": highest_margin_day.asp_per_litre_eur,
-                "predicted_operating_cash_flow_eur": highest_margin_day.predicted_operating_cash_flow_eur
+                "cogs_per_litre": highest_margin_day.cogs_per_litre
             }
         )
 
@@ -483,7 +495,8 @@ async def get_daily_forecasts(request: ForecastRequest):
                 gross_profit_eur=kpis['gross_profit_eur'],
                 gross_profit_margin_pct=kpis['gross_profit_margin_pct'],
                 asp_per_litre_eur=kpis['asp_per_litre_eur'],
-                predicted_operating_cash_flow_eur=kpis['predicted_operating_cash_flow_eur']
+                predicted_operating_cash_flow_eur=kpis['predicted_operating_cash_flow_eur'],
+                cogs_per_litre=kpis['cogs_per_litre_eur']
             ))
 
         return daily_forecasts
@@ -582,6 +595,11 @@ async def get_analytics_summary():
                 "formula": "Net Sales Revenue - COGS - Marketing Spend",
                 "unit": "EUR",
                 "validation": "Can be negative indicating cash outflow periods"
+            },
+            "cost_per_litre_eur": {
+                "description": "Cost of goods sold per litre",
+                "formula": "COGS / Net Sales Volume",
+                "unit": "EUR per litre"
             }
         },
         "additional_metrics": {
@@ -589,11 +607,6 @@ async def get_analytics_summary():
                 "description": "Cost of goods sold as percentage of revenue",
                 "formula": "(COGS / Net Sales Revenue) x 100",
                 "unit": "%"
-            },
-            "cost_per_litre_eur": {
-                "description": "Cost of goods sold per litre",
-                "formula": "COGS / Net Sales Volume",
-                "unit": "EUR per litre"
             }
         },
         "forecast_capabilities": [
