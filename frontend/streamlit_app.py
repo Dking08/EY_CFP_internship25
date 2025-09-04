@@ -24,7 +24,9 @@ st.sidebar.header("🎯 Forecast Parameters")
 # Forecast Type Selection
 forecast_type = st.sidebar.radio(
     "Select Forecast Type",
-    ["Basic Forecast", "Comprehensive Analysis"])
+    ["Basic Forecast", "Comprehensive Analysis"],
+    help="Basic: Daily KPIs only. Comprehensive: Includes promotional impact, holiday lift, and segment analysis"
+)
 
 # Selectbox for Country
 selected_country = st.sidebar.selectbox(
@@ -56,6 +58,16 @@ forecast_horizon_days = st.sidebar.slider(
 # Calculate start and end dates for the forecast period
 start_date_forecast = date.today() + timedelta(days=1)
 end_date_forecast = start_date_forecast + timedelta(days=forecast_horizon_days - 1)
+
+# Display selected parameters
+st.sidebar.info(f"""
+**Selected Parameters:**
+- Country: {selected_country}
+- Channel: {selected_channel} 
+- Product: {selected_product_category}
+- Period: {start_date_forecast} to {end_date_forecast}
+- Days: {forecast_horizon_days}
+""")
 
 # Button to trigger the forecast
 if st.sidebar.button("🚀 Generate Forecast", type="primary"):
@@ -583,10 +595,44 @@ else:
         ## 🚀 Welcome to the AlcoBev Forecasting Platform
 
         This advanced dashboard provides comprehensive cash flow forecasting and business intelligence for your European AlcoBev operations.
+
+        ### 🎯 **Forecast Types Available:**
+
+        **📊 Basic Forecast**
+        - Daily sales revenue, COGS, and volume predictions
+        - Core KPIs and operating cash flow analysis
+        - Weekly and monthly aggregations
+
+        **🔍 Comprehensive Analysis** *(Recommended)*
+        - All basic forecast features PLUS:
+        - **Promotional Impact Analysis** - Measure campaign effectiveness
+        - **Holiday Sales Lift** - Quantify seasonal effects  
+        - **Segment Performance** - Country/Channel/Product breakdowns
+        - **Marketing Efficiency** - ROI and spend optimization
+        - **Performance Highlights** - Best/worst day identification
+
+        ### 📈 **Key Features:**
+        - Interactive visualizations with drill-down capabilities
+        - Executive summary cards with actionable insights
+        - Advanced KPI calculations and trend analysis
+        - Export-ready data tables and summaries
         """)
 
     with col2:
         st.markdown("""
+        ### 🎛️ **Getting Started:**
+
+        1. **Select Country & Channel**
+        2. **Choose Product Category** 
+        3. **Set Forecast Horizon**
+        4. **Pick Forecast Type**
+        5. **Generate Forecast**
+
+        ### 💡 **Pro Tips:**
+        - Use **Comprehensive Analysis** for strategic planning
+        - Try different horizons (7-90 days) for various use cases
+        - Compare different product categories and channels
+
         ### 🔗 **API Status:**
         """)
 
