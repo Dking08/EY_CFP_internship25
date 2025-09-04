@@ -87,6 +87,9 @@ def calculate_business_kpis(
     # 5. COGS per Litre (EUR)
     cogs_per_litre = (cogs / volume_litres) if volume_litres > 0 else 0
 
+    # 6. Marketing Spend Ratio (%)
+    marketing_spend_ratio = (marketing / sales_revenue * 100) if sales_revenue > 0 else 0
+
     # Additional validation - ensure realistic ranges
     gross_profit_margin = max(-100, min(100, gross_profit_margin))  # Cap at realistic range
 
@@ -95,7 +98,8 @@ def calculate_business_kpis(
         'gross_profit_margin_pct': round(gross_profit_margin, 2),
         'asp_per_litre_eur': round(asp_per_litre, 2),
         'predicted_operating_cash_flow_eur': round(operating_cash_flow, 2),
-        'cogs_per_litre_eur': round(cogs_per_litre, 2)
+        'cogs_per_litre_eur': round(cogs_per_litre, 2),
+        'marketing_spend_ratio': round(marketing_spend_ratio, 2)
     }
 
 def calculate_additional_metrics(
@@ -170,6 +174,7 @@ class DailyForecastResponse(BaseModel):
     asp_per_litre_eur: float
     predicted_operating_cash_flow_eur: float
     cogs_per_litre: float
+    marketing_spend_ratio: float
 
 class ForecastSummary(BaseModel):
     """Summary statistics for the forecast period."""
@@ -191,6 +196,7 @@ class ForecastSummary(BaseModel):
     avg_gross_profit_margin_pct: float
     avg_asp_per_litre_eur: float
     avg_cogs_per_litre: float
+    avg_marketing_spend_ratio: float
 
     # Performance metrics
     best_day_sales: Dict[str, Any]
@@ -329,6 +335,7 @@ def create_forecast_summary(daily_forecasts: List[DailyForecastResponse],
         avg_gross_profit_margin = (total_gross_profit / total_sales * 100) if total_sales > 0 else 0
         avg_asp = (total_sales / total_volume) if total_volume > 0 else 0
         avg_cogs_per_litre = (total_cogs / total_volume) if total_volume > 0 else 0
+        avg_marketing_spend_ratio = (total_marketing / total_sales * 100) if total_sales > 0 else 0
 
         # Find best/worst performing days
         best_day = max(daily_forecasts, key=lambda x: x.predicted_sales_revenue_eur)
@@ -352,6 +359,7 @@ def create_forecast_summary(daily_forecasts: List[DailyForecastResponse],
             avg_gross_profit_margin_pct=round(avg_gross_profit_margin, 2),
             avg_asp_per_litre_eur=round(avg_asp, 2),
             avg_cogs_per_litre=round(avg_cogs_per_litre, 2),
+            avg_marketing_spend_ratio=round(avg_marketing_spend_ratio, 2),
 
             best_day_sales={
                 "date": best_day.forecast_date,
@@ -360,7 +368,8 @@ def create_forecast_summary(daily_forecasts: List[DailyForecastResponse],
                 "gross_profit_margin_pct": best_day.gross_profit_margin_pct,
                 "predicted_operating_cash_flow_eur": best_day.predicted_operating_cash_flow_eur,
                 "asp_per_litre_eur": best_day.asp_per_litre_eur,
-                "cogs_per_litre": best_day.cogs_per_litre
+                "cogs_per_litre": best_day.cogs_per_litre,
+                "marketing_spend_ratio": best_day.marketing_spend_ratio
             },
             worst_day_sales={
                 "date": worst_day.forecast_date,
@@ -369,7 +378,8 @@ def create_forecast_summary(daily_forecasts: List[DailyForecastResponse],
                 "gross_profit_margin_pct": worst_day.gross_profit_margin_pct,
                 "predicted_operating_cash_flow_eur": worst_day.predicted_operating_cash_flow_eur,
                 "asp_per_litre_eur": worst_day.asp_per_litre_eur,
-                "cogs_per_litre": worst_day.cogs_per_litre
+                "cogs_per_litre": worst_day.cogs_per_litre,
+                "marketing_spend_ratio": worst_day.marketing_spend_ratio
             },
             highest_margin_day={
                 "date": highest_margin_day.forecast_date,
@@ -377,7 +387,8 @@ def create_forecast_summary(daily_forecasts: List[DailyForecastResponse],
                 "sales_revenue_eur": highest_margin_day.predicted_sales_revenue_eur,
                 "predicted_operating_cash_flow_eur": highest_margin_day.predicted_operating_cash_flow_eur,
                 "asp_per_litre_eur": highest_margin_day.asp_per_litre_eur,
-                "cogs_per_litre": highest_margin_day.cogs_per_litre
+                "cogs_per_litre": highest_margin_day.cogs_per_litre,
+                "marketing_spend_ratio": highest_margin_day.marketing_spend_ratio
             }
         )
 
@@ -495,8 +506,9 @@ async def get_daily_forecasts(request: ForecastRequest):
                 gross_profit_eur=kpis['gross_profit_eur'],
                 gross_profit_margin_pct=kpis['gross_profit_margin_pct'],
                 asp_per_litre_eur=kpis['asp_per_litre_eur'],
-                predicted_operating_cash_flow_eur=kpis['predicted_operating_cash_flow_eur'],
-                cogs_per_litre=kpis['cogs_per_litre_eur']
+                predicted_operating_cash_flow_eur = kpis['predicted_operating_cash_flow_eur'],
+                cogs_per_litre=kpis['cogs_per_litre_eur'],
+                marketing_spend_ratio=kpis['marketing_spend_ratio']
             ))
 
         return daily_forecasts
@@ -600,6 +612,12 @@ async def get_analytics_summary():
                 "description": "Cost of goods sold per litre",
                 "formula": "COGS / Net Sales Volume",
                 "unit": "EUR per litre"
+            },
+            "marketing_spend_ratio": {
+                "description": "Marketing spend as percentage of revenue",
+                "formula": "(Marketing Spend / Net Sales Revenue) x 100",
+                "unit": "%",
+                "validation": "Only calculated when revenue > 0"
             }
         },
         "additional_metrics": {
