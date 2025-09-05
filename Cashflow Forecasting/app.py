@@ -6,20 +6,37 @@ from datetime import date, timedelta
 import joblib
 import os
 import random
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 # Initialize FastAPI application
 app = FastAPI(
     title="AlcoBev Cash Flow Forecasting API with KPIs",
     description="API for predicting sales revenue, COGS, and calculating business KPIs for European markets.",
-    version="1.0.0"
+    version="1.8.0"
 )
 
-# --- Model Loading Paths ---
+# --- Constants ---
 MODELS_DIR = 'models'
-SALES_MODEL_PATH = os.path.join(MODELS_DIR, 'sales_forecasting_model.pkl')
-COGS_MODEL_PATH = os.path.join(MODELS_DIR, 'cogs_forecasting_model.pkl')
-VOLUME_MODEL_PATH = os.path.join(MODELS_DIR, 'volume_forecasting_model.pkl')
+MODEL_PATHS = {
+    'sales': os.path.join(MODELS_DIR, 'sales_forecasting_model.pkl'),
+    'cogs': os.path.join(MODELS_DIR, 'cogs_forecasting_model.pkl'),
+    'volume': os.path.join(MODELS_DIR, 'volume_forecasting_model.pkl')
+}
+
+# Product category multipliers
+PRODUCT_CATEGORY_MULTIPLIERS = {
+    "Beer": 1.2,
+    "Wine": 1.0,
+    "Spirits": 1.5,
+    "RTD": 0.8
+}
+
+VOLUME_BASE_MULTIPLIERS = {
+    "Beer": 1.3,
+    "Wine": 1.0,
+    "Spirits": 0.7,
+    "RTD": 1.1
+}
 
 # Model pipelines
 sales_pipeline = None
@@ -35,6 +52,7 @@ INPUT_FEATURES_ORDER = [
     'Net_Sales_Revenue_EUR_lag1', 'COGS_EUR_lag1',
     'Country', 'Channel', 'Product_Category'
 ]
+
 VOLUME_FEATURES = [
     'Marketing_Spend_EUR', 'Promotional_Event',
     'Consumer_Confidence_Index', 'Inflation_Rate_EUR', 'Avg_Temp_C',
@@ -42,77 +60,260 @@ VOLUME_FEATURES = [
     'day_of_week', 'month', 'year', 'day_of_year', 'week_of_year',
     'Net_Sales_Volume_Litres_lag1',
     'Country', 'Channel', 'Product_Category'
-] # 13 numerical features
+]
 
-# --- KPI Calculation Functions ---
-def calculate_kpis(
+# --- Utility Functions ---
+def validate_and_sanitize_inputs(*values: float) -> List[float]:
+    """Validate and sanitize numeric inputs - common pattern extracted."""
+    return [max(0, float(value)) for value in values]
+
+def safe_divide(numerator: float, denominator: float, fallback: float = 0.0) -> float:
+    """Safe division with fallback - extracted common pattern."""
+    return (numerator / denominator) if denominator > 0 else fallback
+
+def cap_percentage(value: float, min_val: float = -100, max_val: float = 100) -> float:
+    """Cap percentage values within realistic range - extracted common pattern."""
+    return max(min_val, min(max_val, value))
+
+def load_single_model(model_path: str, model_name: str) -> Tuple[object, bool]:
+    """Load a single model with error handling - extracted pattern."""
+    try:
+        if os.path.exists(model_path):
+            model = joblib.load(model_path)
+            print(f"Successfully loaded {model_name} pipeline from {model_path}")
+            print(f"{model_name} pipeline expects {model.named_steps['preprocessor'].n_features_in_} features")
+            return model, True
+        else:
+            print(f"{model_name} model not found at {model_path}. Using dummy predictions.")
+            return None, False
+    except Exception as e:
+        print(f"Error loading {model_name} model: {e}")
+        return None, False
+
+def create_time_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Create time-based features - extracted common pattern."""
+    df = df.copy()
+    df['day_of_week'] = df['Date'].dt.dayofweek
+    df['month'] = df['Date'].dt.month
+    df['year'] = df['Date'].dt.year
+    df['day_of_year'] = df['Date'].dt.dayofyear
+    df['week_of_year'] = df['Date'].dt.isocalendar().week.astype(int)
+    return df
+
+def get_promotional_event_indicator(day: int) -> int:
+    """Get promotional event indicator - extracted common pattern."""
+    return 1 if day % 7 == 0 or day % 15 == 0 else 0
+
+def calculate_seasonal_factor(day_of_year: int) -> float:
+    """Calculate seasonal factor - extracted common pattern."""
+    return 1 + 0.2 * np.sin(2 * np.pi * day_of_year / 365)
+
+# --- Enhanced KPI Calculation Functions ---
+def calculate_business_kpis(
     sales_revenue: float,
     cogs: float,
     volume_litres: float,
     marketing: float
 ) -> Dict[str, float]:
     """
-    Calculate business KPIs based on predicted/actual values.
-
-    Args:
-        sales_revenue: Net sales revenue in EUR
-        cogs: Cost of goods sold in EUR  
-        volume_litres: Sales volume in litres
-
-    Returns:
-        Dictionary containing calculated KPIs
+    Calculate business KPIs with improved validation and reduced repetition.
     """
-    # 1. Gross Profit (EUR)
+    # Validate and sanitize inputs using utility function
+    sales_revenue, cogs, volume_litres, marketing = validate_and_sanitize_inputs(
+        sales_revenue, cogs, volume_litres, marketing
+    )
+
+    # Core calculations
     gross_profit = sales_revenue - cogs
 
-    # 2. Gross Profit Margin (%)
-    gross_profit_margin = (gross_profit / sales_revenue * 100) if sales_revenue > 0 else 0
+    # Use safe division utility to reduce repetition
+    gross_profit_margin = cap_percentage(safe_divide(gross_profit * 100, sales_revenue))
+    asp_per_litre = safe_divide(sales_revenue, volume_litres)
+    cogs_per_litre = safe_divide(cogs, volume_litres)
+    marketing_spend_ratio = safe_divide(marketing * 100, sales_revenue)
+    revenue_per_euro_marketing = safe_divide(sales_revenue, marketing)
+    litres_per_euro_marketing = safe_divide(volume_litres, marketing)
 
-    # 3. Average Selling Price per Litre (EUR)
-    asp_per_litre = (sales_revenue / volume_litres) if volume_litres > 0 else 0
-
+    # Operating cash flow
     operating_cash_flow = sales_revenue - cogs - marketing
 
+    # Return with consistent rounding
     return {
         'gross_profit_eur': round(gross_profit, 2),
         'gross_profit_margin_pct': round(gross_profit_margin, 2),
         'asp_per_litre_eur': round(asp_per_litre, 2),
-        'predicted_operating_cash_flow_eur': round(operating_cash_flow, 2)
+        'predicted_operating_cash_flow_eur': round(operating_cash_flow, 2),
+        'cogs_per_litre_eur': round(cogs_per_litre, 2),
+        'marketing_spend_ratio': round(marketing_spend_ratio, 2),
+        'revenue_per_euro_marketing': round(revenue_per_euro_marketing, 2),
+        'litres_per_euro_marketing': round(litres_per_euro_marketing, 2)
     }
 
-# Load models on startup
+def calculate_additional_metrics(
+    sales_revenue: float,
+    cogs: float,
+    volume_litres: float
+) -> Dict[str, float]:
+    """Calculate additional metrics with utility functions."""
+    sales_revenue, cogs, volume_litres = validate_and_sanitize_inputs(sales_revenue, cogs, volume_litres)
+
+    return {
+        'cogs_ratio_pct': round(safe_divide(cogs * 100, sales_revenue), 2)
+    }
+
+def aggregate_kpi_totals(daily_forecasts: List) -> Dict[str, float]:
+    """Aggregate KPI totals from daily forecasts"""
+
+    promo_forecasts = [f for f in daily_forecasts if f.promotional_event]
+    non_promo_forecasts = [f for f in daily_forecasts if not f.promotional_event]
+
+    # Calculate basic totals
+    totals = {
+        'total_sales': sum(f.predicted_sales_revenue_eur for f in daily_forecasts),
+        'total_cogs': sum(f.predicted_cogs_eur for f in daily_forecasts),
+        'total_volume': sum(f.predicted_sales_volume_litres for f in daily_forecasts),
+        'total_marketing': sum(f.marketing_spend_eur for f in daily_forecasts),
+        'total_gross_profit': sum(f.gross_profit_eur for f in daily_forecasts),
+        'total_operating_cash_flow': sum(f.predicted_operating_cash_flow_eur for f in daily_forecasts),
+    }
+
+    # Promotional events totals
+    totals['total_revenue_promotional_events'] = sum(f.predicted_sales_revenue_eur for f in promo_forecasts) if promo_forecasts else 0
+    totals['total_volume_promotional_events'] = sum(f.predicted_sales_volume_litres for f in promo_forecasts) if promo_forecasts else 0
+    totals['total_revenue_non_promotional'] = sum(f.predicted_sales_revenue_eur for f in non_promo_forecasts) if non_promo_forecasts else 0
+    totals['total_volume_non_promotional'] = sum(f.predicted_sales_volume_litres for f in non_promo_forecasts) if non_promo_forecasts else 0
+
+    # Count days
+    totals['promo_days_count'] = len(promo_forecasts)
+    totals['non_promo_days_count'] = len(non_promo_forecasts)
+
+    return totals
+
+def calculate_promotional_impact(totals: Dict[str, float]) -> Dict[str, float]:
+    """Calculate promotional impact KPIs"""
+    # Calculate averages
+    avg_promo_sales = safe_divide(totals['total_revenue_promotional_events'], totals['promo_days_count'])
+    avg_non_promo_sales = safe_divide(totals['total_revenue_non_promotional'], totals['non_promo_days_count'])
+    avg_promo_volume = safe_divide(totals['total_volume_promotional_events'], totals['promo_days_count'])
+    avg_non_promo_volume = safe_divide(totals['total_volume_non_promotional'], totals['non_promo_days_count'])
+
+    # Calculate impact percentages
+    promotional_sales_impact = safe_divide((avg_promo_sales - avg_non_promo_sales) * 100, avg_non_promo_sales)
+    promotional_volume_impact = safe_divide((avg_promo_volume - avg_non_promo_volume) * 100, avg_non_promo_volume)
+
+    return {
+        'avg_promo_sales': round(avg_promo_sales, 2),
+        'avg_non_promo_sales': round(avg_non_promo_sales, 2),
+        'avg_promo_volume': round(avg_promo_volume, 2),
+        'avg_non_promo_volume': round(avg_non_promo_volume, 2),
+        'promotional_sales_impact_pct': round(promotional_sales_impact, 2),
+        'promotional_volume_impact_pct': round(promotional_volume_impact, 2)
+    }
+
+def calculate_holiday_impact(future_df_raw: pd.DataFrame, daily_forecasts: List) -> Dict[str, float]:
+    """Calculate holiday sales lift"""
+    # Create a mapping from dates to holiday indicators
+    date_holiday_map = dict(zip(future_df_raw['Date'].dt.date, future_df_raw['Holiday_Indicator']))
+
+    # Separate holiday and non-holiday forecasts
+    holiday_forecasts = [f for f in daily_forecasts if date_holiday_map.get(f.forecast_date, 0) == 1]
+    non_holiday_forecasts = [f for f in daily_forecasts if date_holiday_map.get(f.forecast_date, 0) == 0]
+
+    # Calculate averages
+    avg_holiday_sales = safe_divide(
+        sum(f.predicted_sales_revenue_eur for f in holiday_forecasts), 
+        len(holiday_forecasts)
+    ) if holiday_forecasts else 0
+
+    avg_non_holiday_sales = safe_divide(
+        sum(f.predicted_sales_revenue_eur for f in non_holiday_forecasts), 
+        len(non_holiday_forecasts)
+    ) if non_holiday_forecasts else 0
+
+    avg_holiday_volume = safe_divide(
+        sum(f.predicted_sales_volume_litres for f in holiday_forecasts), 
+        len(holiday_forecasts)
+    ) if holiday_forecasts else 0
+
+    avg_non_holiday_volume = safe_divide(
+        sum(f.predicted_sales_volume_litres for f in non_holiday_forecasts), 
+        len(non_holiday_forecasts)
+    ) if non_holiday_forecasts else 0
+
+    # Calculate lift percentages
+    holiday_sales_lift = safe_divide((avg_holiday_sales - avg_non_holiday_sales) * 100, avg_non_holiday_sales)
+    holiday_volume_lift = safe_divide((avg_holiday_volume - avg_non_holiday_volume) * 100, avg_non_holiday_volume)
+
+    return {
+        'avg_holiday_sales': round(avg_holiday_sales, 2),
+        'avg_non_holiday_sales': round(avg_non_holiday_sales, 2),
+        'avg_holiday_volume': round(avg_holiday_volume, 2),
+        'avg_non_holiday_volume': round(avg_non_holiday_volume, 2),
+        'holiday_sales_lift_pct': round(holiday_sales_lift, 2),
+        'holiday_volume_lift_pct': round(holiday_volume_lift, 2),
+        'holiday_days_count': len(holiday_forecasts),
+        'non_holiday_days_count': len(non_holiday_forecasts)
+    }
+
+def calculate_summary_averages(totals: Dict[str, float], num_days: int) -> Dict[str, float]:
+    """Calculate summary averages - extracted common pattern."""
+    return {
+        'avg_daily_sales': totals['total_sales'] / num_days,
+        'avg_daily_gross_profit': totals['total_gross_profit'] / num_days,
+        'avg_gross_profit_margin': safe_divide(totals['total_gross_profit'] * 100, totals['total_sales']),
+        'avg_asp': safe_divide(totals['total_sales'], totals['total_volume']),
+        'avg_cogs_per_litre': safe_divide(totals['total_cogs'], totals['total_volume']),
+        'avg_marketing_spend_ratio': safe_divide(totals['total_marketing'] * 100, totals['total_sales']),
+        'avg_revenue_per_euro_marketing': safe_divide(totals['total_sales'], totals['total_marketing']),
+        'avg_litres_per_euro_marketing': safe_divide(totals['total_volume'], totals['total_marketing'])
+    }
+
+def find_performance_days(daily_forecasts: List) -> Dict[str, Any]:
+    """Find best/worst performing days - extracted common pattern."""
+    best_day = max(daily_forecasts, key=lambda x: x.predicted_sales_revenue_eur)
+    worst_day = min(daily_forecasts, key=lambda x: x.predicted_sales_revenue_eur)
+    highest_margin_day = max(daily_forecasts, key=lambda x: x.gross_profit_margin_pct)
+
+    def create_day_summary(day_forecast):
+        """Create day summary - extracted common pattern."""
+        return {
+            "date": day_forecast.forecast_date,
+            "sales_revenue_eur": day_forecast.predicted_sales_revenue_eur,
+            "gross_profit_eur": day_forecast.gross_profit_eur,
+            "gross_profit_margin_pct": day_forecast.gross_profit_margin_pct,
+            "predicted_operating_cash_flow_eur": day_forecast.predicted_operating_cash_flow_eur,
+            "asp_per_litre_eur": day_forecast.asp_per_litre_eur,
+            "cogs_per_litre": day_forecast.cogs_per_litre,
+            "marketing_spend_ratio": day_forecast.marketing_spend_ratio,
+            "revenue_per_euro_marketing": day_forecast.revenue_per_euro_marketing,
+            "litres_per_euro_marketing": day_forecast.litres_per_euro_marketing,
+            "promotional_event": day_forecast.promotional_event
+        }
+
+    return {
+        'best_day_sales': create_day_summary(best_day),
+        'worst_day_sales': create_day_summary(worst_day),
+        'highest_margin_day': create_day_summary(highest_margin_day)
+    }
+
+# Load models on startup (refactored to reduce repetition)
 @app.on_event("startup")
 async def load_assets():
     global sales_pipeline, cogs_pipeline, volume_pipeline
+
     try:
-        if os.path.exists(SALES_MODEL_PATH):
-            sales_pipeline = joblib.load(SALES_MODEL_PATH)
-            print(f"Successfully loaded sales pipeline from {SALES_MODEL_PATH}")
-            print(f"Sales pipeline expects {sales_pipeline.named_steps['preprocessor'].n_features_in_} features")
-        else:
-            print(f"Sales model not found at {SALES_MODEL_PATH}. Using dummy predictions.")
-
-        if os.path.exists(COGS_MODEL_PATH):
-            cogs_pipeline = joblib.load(COGS_MODEL_PATH)
-            print(f"Successfully loaded COGS pipeline from {COGS_MODEL_PATH}")
-            print(f"COGS pipeline expects {cogs_pipeline.named_steps['preprocessor'].n_features_in_} features")
-        else:
-            print(f"COGS model not found at {COGS_MODEL_PATH}. Using dummy predictions.")
-
-        if os.path.exists(VOLUME_MODEL_PATH):
-            volume_pipeline = joblib.load(VOLUME_MODEL_PATH)
-            print(f"Successfully loaded volume pipeline from {VOLUME_MODEL_PATH}")
-            print(f"Volume pipeline expects {volume_pipeline.named_steps['preprocessor'].n_features_in_} features")
-        else:
-            print(f"Volume model not found at {VOLUME_MODEL_PATH}. Using dummy predictions.")
+        # Load all models using utility function
+        sales_pipeline, _ = load_single_model(MODEL_PATHS['sales'], 'sales')
+        cogs_pipeline, _ = load_single_model(MODEL_PATHS['cogs'], 'COGS')
+        volume_pipeline, _ = load_single_model(MODEL_PATHS['volume'], 'volume')
 
     except Exception as e:
-        print(f"Error loading assets: {e}. Using dummy predictions.")
+        print(f"Error during model loading: {e}. Using dummy predictions.")
         sales_pipeline = None
         cogs_pipeline = None
         volume_pipeline = None
 
-# --- Pydantic Models ---
+# --- Enhanced Pydantic Models ---
 class ForecastRequest(BaseModel):
     """Request payload for forecasting."""
     country: str = "Germany"
@@ -122,42 +323,76 @@ class ForecastRequest(BaseModel):
     end_date: date = date.today() + timedelta(days=30)
 
 class DailyForecastResponse(BaseModel):
-    """Daily forecast response with comprehensive KPIs."""
+    """Daily forecast response with KPIs"""
     forecast_date: date
     predicted_sales_revenue_eur: float
     predicted_cogs_eur: float
     predicted_sales_volume_litres: float
     marketing_spend_eur: float
+    promotional_event: bool
 
     # Core KPIs
     gross_profit_eur: float
     gross_profit_margin_pct: float
     asp_per_litre_eur: float
-
-    # Cash Flow KPIs
-    # operating_cash_flow_eur: float
-    predicted_operating_cash_flow_eur: float  # After marketing spend
+    predicted_operating_cash_flow_eur: float
+    cogs_per_litre: float
+    marketing_spend_ratio: float
+    revenue_per_euro_marketing: float
+    litres_per_euro_marketing: float
 
 class ForecastSummary(BaseModel):
-    """Summary statistics for the forecast period."""
+    """Enhanced summary statistics with promotional, holiday, and segment KPIs."""
     period_start: date
     period_end: date
     total_days: int
-    
-    # Totals
+
+    # Basic Totals
     total_sales_revenue_eur: float
     total_cogs_eur: float
     total_volume_litres: float
     total_marketing_spend_eur: float
     total_gross_profit_eur: float
     total_operating_cash_flow_eur: float
-    
-    # Averages
+
+    # Basic Averages
     avg_daily_sales_revenue_eur: float
     avg_daily_gross_profit_eur: float
     avg_gross_profit_margin_pct: float
     avg_asp_per_litre_eur: float
-    
+    avg_cogs_per_litre: float
+    avg_marketing_spend_ratio: float
+    avg_revenue_per_euro_marketing: float
+    avg_litres_per_euro_marketing: float
+
+    # Promotional Impact KPIs
+    avg_promo_sales: float
+    avg_non_promo_sales: float
+    avg_promo_volume: float
+    avg_non_promo_volume: float
+    promotional_sales_impact_pct: float
+    promotional_volume_impact_pct: float
+    promo_days_count: int
+    non_promo_days_count: int
+
+    # Holiday Sales Lift KPIs
+    avg_holiday_sales: float
+    avg_non_holiday_sales: float
+    avg_holiday_volume: float
+    avg_non_holiday_volume: float
+    holiday_sales_lift_pct: float
+    holiday_volume_lift_pct: float
+    holiday_days_count: int
+    non_holiday_days_count: int
+
+    # NEW: Segment Performance KPIs
+    sales_by_country: Dict[str, float]
+    sales_by_channel: Dict[str, float]
+    sales_by_product_category: Dict[str, float]
+    volume_by_country: Dict[str, float]
+    volume_by_channel: Dict[str, float]
+    volume_by_product_category: Dict[str, float]
+
     # Performance metrics
     best_day_sales: Dict[str, Any]
     worst_day_sales: Dict[str, Any]
@@ -169,183 +404,261 @@ class ComprehensiveForecastResponse(BaseModel):
     daily_forecasts: List[DailyForecastResponse]
     summary: ForecastSummary
 
+def calculate_segment_performance(request: ForecastRequest, daily_forecasts: List) -> Dict[str, float]:
+    """Calculate segment-wise performance"""
+    total_sales = sum(f.predicted_sales_revenue_eur for f in daily_forecasts)
+    total_volume = sum(f.predicted_sales_volume_litres for f in daily_forecasts)
+
+    return {
+        'sales_by_country': {request.country: round(total_sales, 2)},
+        'sales_by_channel': {request.channel: round(total_sales, 2)},
+        'sales_by_product_category': {request.product_category: round(total_sales, 2)},
+        'volume_by_country': {request.country: round(total_volume, 2)},
+        'volume_by_channel': {request.channel: round(total_volume, 2)},
+        'volume_by_product_category': {request.product_category: round(total_volume, 2)}
+    }
+
 # --- Helper Functions ---
+def generate_mock_external_data(d: date) -> Dict[str, float]:
+    """Generate mock external data for a single date"""
+    return {
+        'cci': 100 + (d.day % 10) * 0.5 + random.uniform(-2, 2),
+        'inflation': 2.0 + (d.month % 3) * 0.1 + random.uniform(-0.5, 0.5),
+        'temp': 10 + (d.day % 15) + random.uniform(-3, 3),
+        'holiday': 1 if d.month == 12 and d.day == 25 else 0,
+        'comp_act': 0.8 + (d.day % 7) * 0.01 + random.uniform(-0.1, 0.1)
+    }
+
+def calculate_marketing_spend(d: date) -> float:
+    """Calculate marketing spend for a date"""
+    base_spend = 5000 + (d.day % 5) * 100 + random.uniform(-500, 500)
+    if get_promotional_event_indicator(d.day):
+        base_spend *= 1.5
+    return max(0, base_spend)
+
+def calculate_base_volume(product_category: str) -> float:
+    """Calculate base volume for product category"""
+    return 10000 * VOLUME_BASE_MULTIPLIERS.get(product_category, 1.0)
+
 def generate_mock_future_data(request: ForecastRequest) -> pd.DataFrame:
-    """Generate mock future data for forecasting."""
-    dates = pd.date_range(start=request.start_date, end=request.end_date, freq='D')
-    data = []
+    """Generate mock future data with reduced repetition."""
+    try:
+        dates = pd.date_range(start=request.start_date, end=request.end_date, freq='D')
+        data = []
 
-    for d in dates:
-        # Dummy external data for POC
-        mock_cci = 100 + (d.day % 10) * 0.5 + random.uniform(-2, 2)
-        mock_inflation = 2.0 + (d.month % 3) * 0.1 + random.uniform(-0.5, 0.5)
-        mock_temp = 10 + (d.day % 15) + random.uniform(-3, 3)
-        mock_holiday = 1 if d.month == 12 and d.day == 25 else 0
-        mock_comp_act = 0.8 + (d.day % 7) * 0.01 + random.uniform(-0.1, 0.1)
+        # Pre-calculate base values to avoid repetition
+        base_volume = calculate_base_volume(request.product_category)
 
-        mock_marketing_spend = 5000 + (d.day % 5) * 100 + random.uniform(-500, 500)
-        if d.day % 7 == 0 or d.day % 15 == 0:
-             mock_marketing_spend *= 1.5
+        for d in dates:
+            # Use utility functions to reduce repetition
+            external_data = generate_mock_external_data(d)
+            marketing_spend = calculate_marketing_spend(d)
 
-        # Volume estimation based on product category and seasonality
-        base_volume = 10000
-        if request.product_category == "Beer":
-            base_volume *= 1.3
-        elif request.product_category == "Wine":
-            base_volume *= 1.0
-        elif request.product_category == "Spirits":
-            base_volume *= 0.7
-        elif request.product_category == "RTD":
-            base_volume *= 1.1
+            # Calculate volume with seasonality
+            seasonal_factor = calculate_seasonal_factor(d.day_of_year)
+            mock_sales_volume_litres = base_volume * seasonal_factor + random.uniform(-1000, 1000)
 
-        # Add seasonality for volume
-        seasonal_factor = 1 + 0.2 * np.sin(2 * np.pi * d.day_of_year / 365)
-        mock_sales_volume_litres = base_volume * seasonal_factor + random.uniform(-1000, 1000)
+            # Lagged features (same as before)
+            mock_net_sales_revenue_lag1 = 300000
+            mock_cogs_lag1 = 120000
+            mock_sales_volume_litres_lag1 = mock_sales_volume_litres * 0.95 + random.uniform(-500, 500)
 
-        # Lagged features - use fixed placeholders for POC
-        mock_net_sales_revenue_lag1 = 300000
-        mock_cogs_lag1 = 120000
-        mock_sales_volume_litres_lag1 = mock_sales_volume_litres * 0.95 + random.uniform(-500, 500)
+            data.append({
+                'Date': d,
+                'Country': request.country,
+                'Channel': request.channel,
+                'Product_Category': request.product_category,
+                'Net_Sales_Volume_Litres': max(0, mock_sales_volume_litres),
+                'Marketing_Spend_EUR': marketing_spend,
+                'Promotional_Event': get_promotional_event_indicator(d.day),
+                'Consumer_Confidence_Index': external_data['cci'],
+                'Inflation_Rate_EUR': external_data['inflation'],
+                'Avg_Temp_C': external_data['temp'],
+                'Holiday_Indicator': external_data['holiday'],
+                'Competitor_Activity_Index': external_data['comp_act'],
+                'Net_Sales_Revenue_EUR_lag1': mock_net_sales_revenue_lag1,
+                'COGS_EUR_lag1': mock_cogs_lag1,
+                'Net_Sales_Volume_Litres_lag1': mock_sales_volume_litres_lag1
+            })
 
-        data.append({
-            'Date': d,
-            'Country': request.country,
-            'Channel': request.channel,
-            'Product_Category': request.product_category,
-            'Net_Sales_Volume_Litres': max(0, mock_sales_volume_litres),
-            'Marketing_Spend_EUR': max(0, mock_marketing_spend),
-            'Promotional_Event': 1 if d.day % 7 == 0 or d.day % 15 == 0 else 0,
-            'Consumer_Confidence_Index': mock_cci,
-            'Inflation_Rate_EUR': mock_inflation,
-            'Avg_Temp_C': mock_temp,
-            'Holiday_Indicator': mock_holiday,
-            'Competitor_Activity_Index': mock_comp_act,
-            'Net_Sales_Revenue_EUR_lag1': mock_net_sales_revenue_lag1,
-            'COGS_EUR_lag1': mock_cogs_lag1,
-            'Net_Sales_Volume_Litres_lag1': mock_sales_volume_litres_lag1
-        })
+        df = pd.DataFrame(data)
+        df['Date'] = pd.to_datetime(df['Date'])
+        return df
 
-    df = pd.DataFrame(data)
-    df['Date'] = pd.to_datetime(df['Date'])
-    return df
+    except Exception as e:
+        raise ValueError(f"Failed to generate mock data: {str(e)}")
 
 def prepare_features_for_prediction(df: pd.DataFrame) -> pd.DataFrame:
-    """Prepare features for prediction by the pipeline."""
-    # Create time-based features
-    df['day_of_week'] = df['Date'].dt.dayofweek
-    df['month'] = df['Date'].dt.month
-    df['year'] = df['Date'].dt.year
-    df['day_of_year'] = df['Date'].dt.dayofyear
-    df['week_of_year'] = df['Date'].dt.isocalendar().week.astype(int)
+    """Prepare features for prediction with utility functions."""
+    try:
+        df = create_time_features(df)
+        feature_df = df[INPUT_FEATURES_ORDER].copy()
 
-    # Select features in correct order
-    feature_df = df[INPUT_FEATURES_ORDER].copy()
+        if len(feature_df.columns) != 18:
+            raise ValueError(f"Feature mismatch: expected 18 features, got {len(feature_df.columns)}")
 
-    if len(feature_df.columns) != 18:
-        raise ValueError(f"Feature mismatch: expected 18 features, got {len(feature_df.columns)}")
+        return feature_df
 
-    return feature_df
+    except Exception as e:
+        raise ValueError(f"Feature preparation failed: {str(e)}")
 
 def prepare_volume_features_for_prediction(df: pd.DataFrame) -> pd.DataFrame:
-    """Prepare features for volume prediction by the volume pipeline."""
-    # Create time-based features
-    df['day_of_week'] = df['Date'].dt.dayofweek
-    df['month'] = df['Date'].dt.month
-    df['year'] = df['Date'].dt.year
-    df['day_of_year'] = df['Date'].dt.dayofyear
-    df['week_of_year'] = df['Date'].dt.isocalendar().week.astype(int)
+    """Prepare volume features with utility functions."""
+    try:
+        df = create_time_features(df)
+        feature_df = df[VOLUME_FEATURES].copy()
 
-    # Select features in correct order
-    feature_df = df[VOLUME_FEATURES].copy()
+        if len(feature_df.columns) != 16:
+            raise ValueError(f"Volume feature mismatch: expected 16 features, got {len(feature_df.columns)}")
 
-    if len(feature_df.columns) != 16:
-        raise ValueError(f"Volume feature mismatch: expected 16 features, got {len(feature_df.columns)}")
+        return feature_df
 
-    return feature_df
+    except Exception as e:
+        raise ValueError(f"Volume feature preparation failed: {str(e)}")
 
-def create_forecast_summary(daily_forecasts: List[DailyForecastResponse], 
-                          request: ForecastRequest) -> ForecastSummary:
-    """Create comprehensive summary statistics."""
-
+def create_forecast_summary(daily_forecasts: List[DailyForecastResponse],
+                          request: ForecastRequest,
+                          future_df_raw: pd.DataFrame) -> ForecastSummary:
+    """Create comprehensive summary with ALL new KPI"""
     if not daily_forecasts:
         raise ValueError("No daily forecasts to summarize")
 
-    # Calculate totals
-    total_sales = sum(f.predicted_sales_revenue_eur for f in daily_forecasts)
-    total_cogs = sum(f.predicted_cogs_eur for f in daily_forecasts)
-    total_volume = sum(f.predicted_sales_volume_litres for f in daily_forecasts)
-    total_marketing = sum(f.marketing_spend_eur for f in daily_forecasts)
-    total_gross_profit = sum(f.gross_profit_eur for f in daily_forecasts)
-    total_operating_cash_flow = sum(f.operating_cash_flow_eur for f in daily_forecasts)
+    try:
+        num_days = len(daily_forecasts)
 
-    # Calculate averages
-    num_days = len(daily_forecasts)
-    avg_daily_sales = total_sales / num_days
-    avg_daily_gross_profit = total_gross_profit / num_days
-    avg_gross_profit_margin = (total_gross_profit / total_sales * 100) if total_sales > 0 else 0
-    avg_asp = (total_sales / total_volume) if total_volume > 0 else 0
+        # Use utility functions to calculate basic metrics
+        totals = aggregate_kpi_totals(daily_forecasts)
+        averages = calculate_summary_averages(totals, num_days)
+        performance_days = find_performance_days(daily_forecasts)
 
-    # Find best/worst performing days
-    best_day = max(daily_forecasts, key=lambda x: x.predicted_sales_revenue_eur)
-    worst_day = min(daily_forecasts, key=lambda x: x.predicted_sales_revenue_eur)
-    highest_margin_day = max(daily_forecasts, key=lambda x: x.gross_profit_margin_pct)
+        # Calculate promotional impact
+        promotional_impact = calculate_promotional_impact(totals)
 
-    return ForecastSummary(
-        period_start=request.start_date,
-        period_end=request.end_date,
-        total_days=num_days,
-        total_sales_revenue_eur=round(total_sales, 2),
-        total_cogs_eur=round(total_cogs, 2),
-        total_volume_litres=round(total_volume, 2),
-        total_marketing_spend_eur=round(total_marketing, 2),
-        total_gross_profit_eur=round(total_gross_profit, 2),
-        total_operating_cash_flow_eur=round(total_operating_cash_flow, 2),
-        avg_daily_sales_revenue_eur=round(avg_daily_sales, 2),
-        avg_daily_gross_profit_eur=round(avg_daily_gross_profit, 2),
-        avg_gross_profit_margin_pct=round(avg_gross_profit_margin, 2),
-        avg_asp_per_litre_eur=round(avg_asp, 2),
-        best_day_sales={
-            "date": best_day.forecast_date,
-            "sales_revenue_eur": best_day.predicted_sales_revenue_eur,
-            "gross_profit_eur": best_day.gross_profit_eur,
-            "gross_profit_margin_pct": best_day.gross_profit_margin_pct
-        },
-        worst_day_sales={
-            "date": worst_day.forecast_date,
-            "sales_revenue_eur": worst_day.predicted_sales_revenue_eur,
-            "gross_profit_eur": worst_day.gross_profit_eur,
-            "gross_profit_margin_pct": worst_day.gross_profit_margin_pct
-        },
-        highest_margin_day={
-            "date": highest_margin_day.forecast_date,
-            "gross_profit_margin_pct": highest_margin_day.gross_profit_margin_pct,
-            "sales_revenue_eur": highest_margin_day.predicted_sales_revenue_eur,
-            "asp_per_litre_eur": highest_margin_day.asp_per_litre_eur
-        }
-    )
+        # Calculate holiday impact
+        holiday_impact = calculate_holiday_impact(future_df_raw, daily_forecasts)
+
+        # Calculate segment performance
+        segment_performance = calculate_segment_performance(request, daily_forecasts)
+
+        return ForecastSummary(
+            period_start=request.start_date,
+            period_end=request.end_date,
+            total_days=num_days,
+
+            # Basic Totals
+            total_sales_revenue_eur=round(totals['total_sales'], 2),
+            total_cogs_eur=round(totals['total_cogs'], 2),
+            total_volume_litres=round(totals['total_volume'], 2),
+            total_marketing_spend_eur=round(totals['total_marketing'], 2),
+            total_gross_profit_eur=round(totals['total_gross_profit'], 2),
+            total_operating_cash_flow_eur=round(totals['total_operating_cash_flow'], 2),
+
+            # Basic Averages
+            avg_daily_sales_revenue_eur=round(averages['avg_daily_sales'], 2),
+            avg_daily_gross_profit_eur=round(averages['avg_daily_gross_profit'], 2),
+            avg_gross_profit_margin_pct=round(averages['avg_gross_profit_margin'], 2),
+            avg_asp_per_litre_eur=round(averages['avg_asp'], 2),
+            avg_cogs_per_litre=round(averages['avg_cogs_per_litre'], 2),
+            avg_marketing_spend_ratio=round(averages['avg_marketing_spend_ratio'], 2),
+            avg_revenue_per_euro_marketing=round(averages['avg_revenue_per_euro_marketing'], 2),
+            avg_litres_per_euro_marketing=round(averages['avg_litres_per_euro_marketing'], 2),
+
+            # Promotional Impact KPIs
+            avg_promo_sales=promotional_impact['avg_promo_sales'],
+            avg_non_promo_sales=promotional_impact['avg_non_promo_sales'],
+            avg_promo_volume=promotional_impact['avg_promo_volume'],
+            avg_non_promo_volume=promotional_impact['avg_non_promo_volume'],
+            promotional_sales_impact_pct=promotional_impact['promotional_sales_impact_pct'],
+            promotional_volume_impact_pct=promotional_impact['promotional_volume_impact_pct'],
+            promo_days_count=totals['promo_days_count'],
+            non_promo_days_count=totals['non_promo_days_count'],
+
+            # Holiday Sales Lift KPIs
+            avg_holiday_sales=holiday_impact['avg_holiday_sales'],
+            avg_non_holiday_sales=holiday_impact['avg_non_holiday_sales'],
+            avg_holiday_volume=holiday_impact['avg_holiday_volume'],
+            avg_non_holiday_volume=holiday_impact['avg_non_holiday_volume'],
+            holiday_sales_lift_pct=holiday_impact['holiday_sales_lift_pct'],
+            holiday_volume_lift_pct=holiday_impact['holiday_volume_lift_pct'],
+            holiday_days_count=holiday_impact['holiday_days_count'],
+            non_holiday_days_count=holiday_impact['non_holiday_days_count'],
+
+            # Segment Performance KPIs
+            sales_by_country=segment_performance['sales_by_country'],
+            sales_by_channel=segment_performance['sales_by_channel'],
+            sales_by_product_category=segment_performance['sales_by_product_category'],
+            volume_by_country=segment_performance['volume_by_country'],
+            volume_by_channel=segment_performance['volume_by_channel'],
+            volume_by_product_category=segment_performance['volume_by_product_category'],
+
+            # Performance metrics
+            best_day_sales=performance_days['best_day_sales'],
+            worst_day_sales=performance_days['worst_day_sales'],
+            highest_margin_day=performance_days['highest_margin_day']
+        )
+
+    except Exception as e:
+        raise ValueError(f"Failed to create forecast summary: {str(e)}")
+
+def generate_dummy_predictions(future_df_raw: pd.DataFrame, request: ForecastRequest) -> Tuple[List[float], List[float], List[float]]:
+    """Generate dummy predictions with reduced repetition."""
+    predicted_sales = []
+    predicted_cogs = []
+    predicted_volume = []
+
+    # Get multiplier once
+    base_sales_multiplier = PRODUCT_CATEGORY_MULTIPLIERS.get(request.product_category, 1.0)
+    base_sales = 250000 * base_sales_multiplier
+
+    for i, row in future_df_raw.iterrows():
+        # Calculate sales with consistent pattern
+        sales_val = (base_sales + 
+                   (row['day_of_week'] * 1000) +
+                   (row['month'] * 5000) +
+                   (row['Promotional_Event'] * 50000) +
+                   random.uniform(-10000, 10000))
+
+        cogs_val = sales_val * 0.4 + random.uniform(-5000, 5000)
+
+        predicted_sales.append(max(0, sales_val))
+        predicted_cogs.append(max(0, cogs_val))
+        predicted_volume.append(max(0, row['Net_Sales_Volume_Litres']))
+
+    return predicted_sales, predicted_cogs, predicted_volume
 
 # --- API Endpoints ---
 @app.get("/")
 async def read_root():
     """Root endpoint for API health check."""
     return {
-        "message": "Welcome to the AlcoBev Cash Flow Forecasting API with KPIs!",
-        "version": "1.0.0",
+        "message": "Welcome to the Enhanced AlcoBev Cash Flow Forecasting API with KPIs!",
+        "version": "1.8.0",
         "features": [
             "Sales Revenue Prediction",
-            "COGS Prediction", 
+            "COGS Prediction",
+            "Volume Prediction",
             "Gross Profit Calculation",
             "Gross Profit Margin Analysis",
             "Average Selling Price per Litre",
             "Operating Cash Flow Forecasting",
+            "Promotional Impact Analysis",
+            "Holiday Sales Lift Analysis",
+            "Segment Performance (Country/Channel/Product)",
             "Comprehensive Business Analytics"
         ],
+        "new_kpis": [
+            "Promotional Sales Impact %",
+            "Holiday Sales Lift %",
+            "Sales by Country/Channel/Product Category",
+            "Volume Impact Analysis"
+        ],
+        "infrastructure": "Enhanced with new KPIs and fixed calculations",
         "docs": "Visit /docs for interactive API documentation"
     }
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint with enhanced model status."""
     return {
         "status": "healthy",
         "models_loaded": {
@@ -353,79 +666,49 @@ async def health_check():
             "cogs_pipeline": cogs_pipeline is not None,
             "volume_pipeline": volume_pipeline is not None
         },
+        "kpi_engine": "Enhanced KPI calculations with promotional, holiday, and segment analysis",
         "timestamp": pd.Timestamp.now().isoformat()
     }
 
 @app.post("/forecast", response_model=List[DailyForecastResponse])
 async def get_daily_forecasts(request: ForecastRequest):
     """
-    Generate daily cash flow forecasts with KPIs for a specified period.
-
-    Returns a list of daily forecasts with comprehensive KPI calculations.
+    Generate daily cash flow forecasts with KPIs using enhanced functions.
     """
     try:
-        # Generate future data
+        # Generate future data using refactored function
         future_df_raw = generate_mock_future_data(request)
         print(f"[DEBUG] Generated {len(future_df_raw)} rows of future data")
 
-        predicted_sales = []
-        predicted_cogs = []
-        predicted_volume = []
-
         if sales_pipeline and cogs_pipeline and volume_pipeline:
             # Use trained pipelines
-            feature_df = prepare_features_for_prediction(future_df_raw.copy())
-            feature_df_volume = prepare_volume_features_for_prediction(future_df_raw.copy())
-
             try:
+                feature_df = prepare_features_for_prediction(future_df_raw.copy())
+                feature_df_volume = prepare_volume_features_for_prediction(future_df_raw.copy())
+
                 predicted_sales = sales_pipeline.predict(feature_df).tolist()
                 predicted_cogs = cogs_pipeline.predict(feature_df).tolist()
                 predicted_volume = volume_pipeline.predict(feature_df_volume).tolist()
                 print("[DEBUG] Successfully used trained pipelines for prediction")
+
             except Exception as e:
                 print(f"Error during pipeline prediction: {e}")
                 raise HTTPException(status_code=500, detail=f"Pipeline prediction failed: {e}")
         else:
-            # Dummy prediction logic
+            # Use refactored dummy prediction function
             print("[DEBUG] Using dummy predictions as pipelines are not loaded")
-            for i, row in future_df_raw.iterrows():
-                base_sales = 250000
-                if request.product_category == "Beer":
-                    base_sales *= 1.2
-                elif request.product_category == "Wine":
-                    base_sales *= 1.0
-                elif request.product_category == "Spirits":
-                    base_sales *= 1.5
-                elif request.product_category == "RTD":
-                    base_sales *= 0.8
+            predicted_sales, predicted_cogs, predicted_volume = generate_dummy_predictions(future_df_raw, request)
 
-                # Add seasonality and randomness
-                sales_val = (base_sales + 
-                           (row['day_of_week'] * 1000) + 
-                           (row['month'] * 5000) + 
-                           (row['Promotional_Event'] * 50000) + 
-                           random.uniform(-10000, 10000))
-                cogs_val = sales_val * 0.4 + random.uniform(-5000, 5000)
-
-                predicted_sales.append(max(0, sales_val))
-                predicted_cogs.append(max(0, cogs_val))
-                predicted_volume.append(max(0, row['Net_Sales_Volume_Litres']))
-
-        # Build daily forecast responses with KPIs
+        # Build daily forecast responses using refactored KPI calculation
         daily_forecasts = []
         for i, row in future_df_raw.iterrows():
             sales = predicted_sales[i]
             cogs = predicted_cogs[i]
-            # volume = row['Net_Sales_Volume_Litres']
             volume = predicted_volume[i]
             marketing = row['Marketing_Spend_EUR']
 
-            # Calculate KPIs
-            kpis = calculate_kpis(sales, cogs, volume, marketing)
-
-            # Calculate cash flows
-            # operating_cash_flow = sales - cogs
-            # predicted_operating_cash_flow = operating_cash_flow - marketing
+            # Use refactored KPI calculation
+            kpis = calculate_business_kpis(sales, cogs, volume, marketing)
 
             daily_forecasts.append(DailyForecastResponse(
                 forecast_date=row['Date'].date(),
@@ -433,10 +716,17 @@ async def get_daily_forecasts(request: ForecastRequest):
                 predicted_cogs_eur=round(max(0, cogs), 2),
                 predicted_sales_volume_litres=round(max(0, volume), 2),
                 marketing_spend_eur=round(max(0, marketing), 2),
+                promotional_event=bool(row['Promotional_Event']),
+
+                # KPIs from refactored function
                 gross_profit_eur=kpis['gross_profit_eur'],
                 gross_profit_margin_pct=kpis['gross_profit_margin_pct'],
                 asp_per_litre_eur=kpis['asp_per_litre_eur'],
-                predicted_operating_cash_flow_eur=kpis['predicted_operating_cash_flow_eur']
+                predicted_operating_cash_flow_eur=kpis['predicted_operating_cash_flow_eur'],
+                cogs_per_litre=kpis['cogs_per_litre_eur'],
+                marketing_spend_ratio=kpis['marketing_spend_ratio'],
+                revenue_per_euro_marketing=kpis['revenue_per_euro_marketing'],
+                litres_per_euro_marketing=kpis['litres_per_euro_marketing']
             ))
 
         return daily_forecasts
@@ -448,17 +738,64 @@ async def get_daily_forecasts(request: ForecastRequest):
 @app.post("/forecast/comprehensive", response_model=ComprehensiveForecastResponse)
 async def get_comprehensive_forecast(request: ForecastRequest):
     """
-    Generate comprehensive forecast with daily data and summary analytics.
-
-    This endpoint provides both detailed daily forecasts and aggregated 
-    summary statistics for business decision making.
+    Generate comprehensive forecast with ALL new KPIs - FIXED implementation.
+    This is where promotional impact, holiday lift, and segment analysis is calculated.
     """
     try:
-        # Get daily forecasts
-        daily_forecasts = await get_daily_forecasts(request)
+        # Generate the raw data
+        future_df_raw = generate_mock_future_data(request)
+        print(f"[DEBUG] Generated {len(future_df_raw)} rows of future data for comprehensive analysis")
 
-        # Create summary
-        summary = create_forecast_summary(daily_forecasts, request)
+        if sales_pipeline and cogs_pipeline and volume_pipeline:
+            # Use trained pipelines
+            try:
+                feature_df = prepare_features_for_prediction(future_df_raw.copy())
+                feature_df_volume = prepare_volume_features_for_prediction(future_df_raw.copy())
+
+                predicted_sales = sales_pipeline.predict(feature_df).tolist()
+                predicted_cogs = cogs_pipeline.predict(feature_df).tolist()
+                predicted_volume = volume_pipeline.predict(feature_df_volume).tolist()
+                print("[DEBUG] Successfully used trained pipelines for comprehensive prediction")
+
+            except Exception as e:
+                print(f"Error during pipeline prediction: {e}")
+                raise HTTPException(status_code=500, detail=f"Pipeline prediction failed: {e}")
+        else:
+            # Use refactored dummy prediction function
+            print("[DEBUG] Using dummy predictions for comprehensive analysis")
+            predicted_sales, predicted_cogs, predicted_volume = generate_dummy_predictions(future_df_raw, request)
+
+        # Build daily forecast responses
+        daily_forecasts = []
+        for i, row in future_df_raw.iterrows():
+            sales = predicted_sales[i]
+            cogs = predicted_cogs[i]
+            volume = predicted_volume[i]
+            marketing = row['Marketing_Spend_EUR']
+
+            # Use enhanced KPI calculation
+            kpis = calculate_business_kpis(sales, cogs, volume, marketing)
+
+            daily_forecasts.append(DailyForecastResponse(
+                forecast_date=row['Date'].date(),
+                predicted_sales_revenue_eur=round(max(0, sales), 2),
+                predicted_cogs_eur=round(max(0, cogs), 2),
+                predicted_sales_volume_litres=round(max(0, volume), 2),
+                marketing_spend_eur=round(max(0, marketing), 2),
+                promotional_event=bool(row['Promotional_Event']),
+
+                # Enhanced KPIs
+                gross_profit_eur=kpis['gross_profit_eur'],
+                gross_profit_margin_pct=kpis['gross_profit_margin_pct'],
+                asp_per_litre_eur=kpis['asp_per_litre_eur'],
+                predicted_operating_cash_flow_eur=kpis['predicted_operating_cash_flow_eur'],
+                cogs_per_litre=kpis['cogs_per_litre_eur'],
+                marketing_spend_ratio=kpis['marketing_spend_ratio'],
+                revenue_per_euro_marketing=kpis['revenue_per_euro_marketing'],
+                litres_per_euro_marketing=kpis['litres_per_euro_marketing']
+            ))
+
+        summary = create_forecast_summary(daily_forecasts, request, future_df_raw)
 
         return ComprehensiveForecastResponse(
             request_params=request,
@@ -478,15 +815,16 @@ async def calculate_kpi_standalone(
     marketing: float = 0.0
 ):
     """
-    Calculate KPIs for given input values.
-
-    Useful for ad-hoc KPI calculations without full forecasting.
+    Calculate KPIs using enhanced functions.
     """
     try:
-        if sales_revenue < 0 or cogs < 0 or volume_litres < 0:
+        # Enhanced input validation using utility function
+        if any(value < 0 for value in [sales_revenue, cogs, volume_litres, marketing]):
             raise HTTPException(status_code=400, detail="All input values must be non-negative")
 
-        kpis = calculate_kpis(sales_revenue, cogs, volume_litres, marketing)
+        # Use refactored KPI calculation functions
+        kpis = calculate_business_kpis(sales_revenue, cogs, volume_litres, marketing)
+        additional_metrics = calculate_additional_metrics(sales_revenue, cogs, volume_litres)
 
         return {
             "input": {
@@ -496,44 +834,128 @@ async def calculate_kpi_standalone(
                 "marketing_spend_eur": marketing
             },
             "calculated_kpis": kpis,
-            "additional_metrics": {
-                "cogs_ratio_pct": round((cogs / sales_revenue * 100) if sales_revenue > 0 else 0, 2),
-                "cost_per_litre_eur": round((cogs / volume_litres) if volume_litres > 0 else 0, 2)
-            }
+            "additional_metrics": additional_metrics,
+            "validation_status": "All inputs validated and calculations completed successfully"
         }
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"KPI calculation failed: {str(e)}")
 
 @app.get("/analytics/summary")
 async def get_analytics_summary():
     """
-    Get summary of available analytics and KPIs.
+    Get summary of available analytics and KPIs with new promotional, holiday, and segment KPIs.
     """
+    # KPI descriptions organized to reduce repetition
+    base_kpis = {
+        "gross_profit_eur": {
+            "description": "Revenue minus Cost of Goods Sold",
+            "formula": "Net Sales Revenue - COGS",
+            "unit": "EUR",
+            "validation": "Always calculated, no negative revenue assumptions"
+        },
+        "gross_profit_margin_pct": {
+            "description": "Gross profit as percentage of revenue",
+            "formula": "(Gross Profit / Net Sales Revenue) x 100",
+            "unit": "%",
+            "validation": "Capped between -100% and 100% for realistic business scenarios"
+        },
+        "asp_per_litre_eur": {
+            "description": "Average selling price per litre",
+            "formula": "Net Sales Revenue / Net Sales Volume",
+            "unit": "EUR per litre",
+            "validation": "Only calculated when volume > 0"
+        },
+        "predicted_operating_cash_flow_eur": {
+            "description": "Cash flow from operations after marketing spend",
+            "formula": "Net Sales Revenue - COGS - Marketing Spend",
+            "unit": "EUR",
+            "validation": "Can be negative indicating cash outflow periods"
+        }
+    }
+
+    extended_kpis = {
+        "cost_per_litre_eur": {
+            "description": "Cost of goods sold per litre",
+            "formula": "COGS / Net Sales Volume",
+            "unit": "EUR per litre"
+        },
+        "marketing_spend_ratio": {
+            "description": "Marketing spend as percentage of revenue",
+            "formula": "(Marketing Spend / Net Sales Revenue) x 100",
+            "unit": "%",
+            "validation": "Only calculated when revenue > 0"
+        },
+        "revenue_per_euro_marketing": {
+            "description": "Revenue generated per euro spent on marketing",
+            "formula": "Net Sales Revenue / Marketing Spend",
+            "unit": "EUR per EUR",
+            "validation": "Only calculated when marketing spend > 0"
+        },
+        "litres_per_euro_marketing": {
+            "description": "Litres sold per euro spent on marketing",
+            "formula": "Net Sales Volume / Marketing Spend",
+            "unit": "Litres per EUR",
+            "validation": "Only calculated when marketing spend > 0"
+        }
+    }
+
+    new_kpis = {
+        "promotional_sales_impact_pct": {
+            "description": "Impact of promotional events on sales",
+            "formula": "(Avg Promo Sales - Avg Non-Promo Sales) / Avg Non-Promo Sales x 100",
+            "unit": "%",
+            "business_insight": "Measures effectiveness of promotional campaigns"
+        },
+        "holiday_sales_lift_pct": {
+            "description": "Sales lift during holiday periods",
+            "formula": "(Avg Holiday Sales - Avg Normal Sales) / Avg Normal Sales x 100",
+            "unit": "%",
+            "business_insight": "Quantifies holiday seasonality impact"
+        },
+        "sales_by_segment": {
+            "description": "Sales aggregated by Country, Channel, and Product Category",
+            "formula": "Sum of Net Sales Revenue by segment",
+            "unit": "EUR",
+            "business_insight": "Identifies best-performing markets and channels"
+        }
+    }
+
     return {
-        "available_kpis": {
-            "gross_profit_eur": {
-                "description": "Revenue minus Cost of Goods Sold",
-                "formula": "Net Sales Revenue - COGS",
-                "unit": "EUR"
-            },
-            "gross_profit_margin_pct": {
-                "description": "Gross profit as percentage of revenue", 
-                "formula": "(Gross Profit / Net Sales Revenue) × 100",
+        "available_kpis": {**base_kpis, **extended_kpis, **new_kpis},
+        "additional_metrics": {
+            "cogs_ratio_pct": {
+                "description": "Cost of goods sold as percentage of revenue",
+                "formula": "(COGS / Net Sales Revenue) x 100",
                 "unit": "%"
-            },
-            "asp_per_litre_eur": {
-                "description": "Average selling price per litre",
-                "formula": "Net Sales Revenue / Net Sales Volume",
-                "unit": "EUR per litre"
             }
         },
         "forecast_capabilities": [
             "Daily sales revenue prediction",
-            "Daily COGS prediction", 
-            "Automated KPI calculation",
+            "Daily COGS prediction",
+            "Daily volume prediction",
+            "Automated KPI calculation with validation",
             "Operating cash flow analysis",
             "Period summary statistics",
-            "Best/worst day identification"
+            "Best/worst day identification",
+            "Promotional impact analysis",
+            "Holiday sales lift analysis", 
+            "Segment performance analysis"
+        ],
+        "new_features": [
+            "Promotional Impact Analysis - Compare promo vs non-promo periods",
+            "Holiday Sales Lift - Measure holiday seasonality effects",
+            "Segment Performance - Country/Channel/Product category breakdowns",
+            "Enhanced business intelligence with actionable insights"
+        ],
+        "infrastructure_improvements": [
+            "Fixed promotional events calculation",
+            "Added holiday impact analysis",
+            "Implemented segment-wise performance metrics",
+            "Enhanced summary statistics with new KPIs",
+            "Improved error handling and validation"
         ],
         "supported_segments": {
             "countries": ["Germany", "France", "Italy", "Spain", "UK"],
@@ -543,13 +965,8 @@ async def get_analytics_summary():
     }
 
 # Instructions to run this enhanced API:
-# 1. Save this code as `app.py`
+# 1. Save this code as `app_enhanced_kpis.py`
 # 2. Ensure you have a `models` directory with trained model files
-# 3. Install required packages: `pip install fastapi uvicorn pandas scikit-learn joblib pydantic xgboost`
-# 4. Run: `uvicorn app:app --reload`
-# 5. Visit: `http://127.0.0.1:8000/docs` for interactive documentation
-# 6. Try the new endpoints:
-#    - GET /analytics/summary - View available KPIs and capabilities
-#    - POST /forecast - Get daily forecasts with KPIs
-#    - POST /forecast/comprehensive - Get detailed analytics with summary
-#    - GET /kpi/calculate - Calculate KPIs for custom inputs
+# 3. Install required packages: `pip install fastapi uvicorn pandas scikit-learn joblib pydantic numpy xgboost`
+# 4. Run: `uvicorn app_enhanced_kpis:app --reload`
+# 5. Visit: `http://127.0.0.1:8000/docs` for interactive API documentation
