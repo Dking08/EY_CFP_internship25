@@ -7,5 +7,5 @@ dynamic_engine/dynamic_models
 venv/
 
 # Model files (too large for GitHub)
-Cashflow\ Forecasting/models/
+Cashflow\ Forecasting/models/*/*
 !Cashflow\ Forecasting/models/preprocessor.pkl
