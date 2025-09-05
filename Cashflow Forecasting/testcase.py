@@ -16,25 +16,56 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 class AccuracyTester:
     """
     Comprehensive testing framework for evaluating AlcoBev forecasting model accuracy
+    Now supports multi-algorithm comparison (XGBoost, LightGBM, Random Forest)
     """
 
     def __init__(self, data_file='alcobev_europe_sales_data.csv', models_dir='models'):
         self.data_file = data_file
         self.models_dir = models_dir
+        
+        # Main model paths (XGBoost - for backward compatibility)
         self.sales_model_path = os.path.join(models_dir, 'sales_forecasting_model.pkl')
         self.cogs_model_path = os.path.join(models_dir, 'cogs_forecasting_model.pkl')
         self.volume_model_path = os.path.join(models_dir, 'volume_forecasting_model.pkl')
+        
+        # Algorithm-specific directories
+        self.xgboost_dir = os.path.join(models_dir, 'xgboost')
+        self.lightgbm_dir = os.path.join(models_dir, 'lightgbm')
+        self.randomforest_dir = os.path.join(models_dir, 'randomforest')
+        
+        # Algorithm model paths
+        self.algorithm_models = {
+            'xgboost': {
+                'sales': os.path.join(self.xgboost_dir, 'xgboost_sales_model.pkl'),
+                'cogs': os.path.join(self.xgboost_dir, 'xgboost_cogs_model.pkl'),
+                'volume': os.path.join(self.xgboost_dir, 'xgboost_volume_model.pkl')
+            },
+            'lightgbm': {
+                'sales': os.path.join(self.lightgbm_dir, 'lightgbm_sales_model.pkl'),
+                'cogs': os.path.join(self.lightgbm_dir, 'lightgbm_cogs_model.pkl'),
+                'volume': os.path.join(self.lightgbm_dir, 'lightgbm_volume_model.pkl')
+            },
+            'randomforest': {
+                'sales': os.path.join(self.randomforest_dir, 'randomforest_sales_model.pkl'),
+                'cogs': os.path.join(self.randomforest_dir, 'randomforest_cogs_model.pkl'),
+                'volume': os.path.join(self.randomforest_dir, 'randomforest_volume_model.pkl')
+            }
+        }
 
         # Load data and models
         self.df = None
         self.sales_pipeline = None
         self.cogs_pipeline = None
         self.volume_pipeline = None
+        
+        # Multi-algorithm model storage
+        self.loaded_models = {}
         self.test_results = {}
+        self.algorithm_results = {}
 
     def load_data_and_models(self):
-        """Load the dataset and trained models"""
-        print("Loading data and models...")
+        """Load the dataset and trained models for all algorithms"""
+        print("Loading data and models for all algorithms...")
 
         # Load data
         try:
@@ -44,28 +75,54 @@ class AccuracyTester:
         except FileNotFoundError:
             raise FileNotFoundError(f"Data file {self.data_file} not found. Run generate_data.py first.")
 
-        # Load models
+        # Load main models (XGBoost - for backward compatibility)
         try:
             if os.path.exists(self.sales_model_path):
                 self.sales_pipeline = joblib.load(self.sales_model_path)
-                print("✓ Sales model loaded successfully")
+                print("✓ Main sales model loaded successfully")
             else:
-                raise FileNotFoundError(f"Sales model not found at {self.sales_model_path}")
+                print(f"⚠️ Main sales model not found at {self.sales_model_path}")
 
             if os.path.exists(self.cogs_model_path):
                 self.cogs_pipeline = joblib.load(self.cogs_model_path)
-                print("✓ COGS model loaded successfully")
+                print("✓ Main COGS model loaded successfully")
             else:
-                raise FileNotFoundError(f"COGS model not found at {self.cogs_model_path}")
+                print(f"⚠️ Main COGS model not found at {self.cogs_model_path}")
 
             if os.path.exists(self.volume_model_path):
                 self.volume_pipeline = joblib.load(self.volume_model_path)
-                print("✓ Volume model loaded successfully")
+                print("✓ Main volume model loaded successfully")
             else:
-                raise FileNotFoundError(f"Volume model not found at {self.volume_model_path}")
+                print(f"⚠️ Main volume model not found at {self.volume_model_path}")
 
         except Exception as e:
-            raise Exception(f"Error loading models: {e}")
+            print(f"⚠️ Error loading main models: {e}")
+
+        # Load algorithm-specific models
+        self.loaded_models = {}
+        for algorithm, model_paths in self.algorithm_models.items():
+            print(f"\n📊 Loading {algorithm.upper()} models...")
+            self.loaded_models[algorithm] = {}
+            
+            for model_type, model_path in model_paths.items():
+                try:
+                    if os.path.exists(model_path):
+                        self.loaded_models[algorithm][model_type] = joblib.load(model_path)
+                        print(f"  ✓ {algorithm} {model_type} model loaded")
+                    else:
+                        print(f"  ⚠️ {algorithm} {model_type} model not found at {model_path}")
+                        self.loaded_models[algorithm][model_type] = None
+                except Exception as e:
+                    print(f"  ❌ Error loading {algorithm} {model_type} model: {e}")
+                    self.loaded_models[algorithm][model_type] = None
+
+        # Summary of loaded models
+        print(f"\n📋 MODEL LOADING SUMMARY:")
+        for algorithm in self.loaded_models:
+            loaded_count = sum(1 for model in self.loaded_models[algorithm].values() if model is not None)
+            print(f"  {algorithm.upper()}: {loaded_count}/3 models loaded")
+            
+        print("="*60)
 
     def prepare_features(self, df):
         """Prepare features for Sales and COGS prediction (same as in training)"""
@@ -86,8 +143,9 @@ class AccuracyTester:
         # Drop rows with NaNs
         df.dropna(inplace=True)
 
-        # Define feature order (must match training)
-        feature_order = [
+        # Define EXACT feature order (must match training) - EXACTLY 18 features
+        # This EXCLUDES Net_Sales_Volume_Litres_lag1 which is only for volume models
+        expected_features = [
             'Net_Sales_Volume_Litres', 'Marketing_Spend_EUR', 'Promotional_Event',
             'Consumer_Confidence_Index', 'Inflation_Rate_EUR', 'Avg_Temp_C',
             'Holiday_Indicator', 'Competitor_Activity_Index',
@@ -96,7 +154,7 @@ class AccuracyTester:
             'Country', 'Channel', 'Product_Category'
         ]
 
-        return df[feature_order + ['Net_Sales_Revenue_EUR', 'COGS_EUR', 'Date']]
+        return df[expected_features + ['Net_Sales_Revenue_EUR', 'COGS_EUR', 'Date']]
 
     def volume_features(self, df):
         """Prepare features for volume prediction (same as in training)"""
@@ -116,8 +174,9 @@ class AccuracyTester:
         # Drop rows with NaNs
         df.dropna(inplace=True)
 
-        # Define feature order (must match training)
-        feature_order = [
+        # Define EXACT feature order (must match training) - EXACTLY 16 features
+        # This EXCLUDES Net_Sales_Revenue_EUR, COGS_EUR and their lag features
+        expected_features = [
             'Marketing_Spend_EUR', 'Promotional_Event',
             'Consumer_Confidence_Index', 'Inflation_Rate_EUR', 'Avg_Temp_C',
             'Holiday_Indicator', 'Competitor_Activity_Index',
@@ -126,7 +185,7 @@ class AccuracyTester:
             'Country', 'Channel', 'Product_Category'
         ]
 
-        return df[feature_order + ['Net_Sales_Volume_Litres', 'Date']]
+        return df[expected_features + ['Net_Sales_Volume_Litres', 'Date']]
 
     def calculate_metrics(self, y_true, y_pred, model_name):
         """Calculate comprehensive accuracy metrics"""
@@ -149,9 +208,11 @@ class AccuracyTester:
 
         return metrics
 
-    def test_holdout_accuracy(self, test_split_date='2024-01-01'):
-        """Test accuracy on holdout test set"""
-        print(f"\n=== HOLDOUT TEST ACCURACY (Test data from {test_split_date}) ===")
+    def test_all_algorithms_holdout(self, test_split_date='2024-01-01'):
+        """Test accuracy on holdout test set for all algorithms"""
+        print(f"\n{'='*80}")
+        print(f"MULTI-ALGORITHM HOLDOUT TEST ACCURACY (Test data from {test_split_date})")
+        print(f"{'='*80}")
 
         # Prepare data
         df_prepared = self.prepare_features(self.df)
@@ -168,45 +229,222 @@ class AccuracyTester:
 
         print(f"Test set size: {len(test_df)} records (Sales/COGS), {len(test_v_df)} records (Volume)")
 
-        # Prepare features and targets
-        feature_cols = [col for col in test_df.columns if col not in ['Net_Sales_Revenue_EUR', 'COGS_EUR', 'Date']]
-        volume_feature_cols = [col for col in test_v_df.columns if col not in ['Net_Sales_Volume_Litres', 'Date']]
+        # Prepare features and targets - use EXACT expected features
+        expected_sales_cogs_features = [
+            'Net_Sales_Volume_Litres', 'Marketing_Spend_EUR', 'Promotional_Event',
+            'Consumer_Confidence_Index', 'Inflation_Rate_EUR', 'Avg_Temp_C',
+            'Holiday_Indicator', 'Competitor_Activity_Index',
+            'day_of_week', 'month', 'year', 'day_of_year', 'week_of_year',
+            'Net_Sales_Revenue_EUR_lag1', 'COGS_EUR_lag1',
+            'Country', 'Channel', 'Product_Category'
+        ]
+        
+        expected_volume_features = [
+            'Marketing_Spend_EUR', 'Promotional_Event',
+            'Consumer_Confidence_Index', 'Inflation_Rate_EUR', 'Avg_Temp_C',
+            'Holiday_Indicator', 'Competitor_Activity_Index',
+            'day_of_week', 'month', 'year', 'day_of_year', 'week_of_year',
+            'Net_Sales_Volume_Litres_lag1',
+            'Country', 'Channel', 'Product_Category'
+        ]
 
-        X_test = test_df[feature_cols]
-        vX_test = test_v_df[volume_feature_cols]
+        X_test = test_df[expected_sales_cogs_features]
+        vX_test = test_v_df[expected_volume_features]
 
         y_test_sales = test_df['Net_Sales_Revenue_EUR']
         y_test_cogs = test_df['COGS_EUR']
         y_test_volume = test_v_df['Net_Sales_Volume_Litres']
 
-        # Make predictions
-        y_pred_sales = self.sales_pipeline.predict(X_test)
-        y_pred_cogs = self.cogs_pipeline.predict(X_test)
-        y_pred_volume = self.volume_pipeline.predict(vX_test)
+        # Test all algorithms
+        algorithm_results = {}
+        for algorithm in ['xgboost', 'lightgbm', 'randomforest']:
+            if algorithm in self.loaded_models:
+                print(f"\n🔍 Testing {algorithm.upper()}...")
+                algorithm_results[algorithm] = {}
+                
+                # Test each model type
+                for model_type, target_data in [
+                    ('sales', (X_test, y_test_sales)),
+                    ('cogs', (X_test, y_test_cogs)),
+                    ('volume', (vX_test, y_test_volume))
+                ]:
+                    model = self.loaded_models[algorithm].get(model_type)
+                    X_data, y_true = target_data
+                    
+                    if model is not None:
+                        try:
+                            y_pred = model.predict(X_data)
+                            metrics = self.calculate_metrics(y_true, y_pred, f'{algorithm}_{model_type}')
+                            algorithm_results[algorithm][model_type] = {
+                                'metrics': metrics,
+                                'predictions': y_pred,
+                                'actual': y_true
+                            }
+                            print(f"  ✓ {model_type.upper()}: MAPE = {metrics['MAPE']:.2f}%, R² = {metrics['R2']:.3f}")
+                        except Exception as e:
+                            print(f"  ❌ {model_type.upper()}: Error during prediction - {e}")
+                            algorithm_results[algorithm][model_type] = None
+                    else:
+                        print(f"  ⚠️ {model_type.upper()}: Model not loaded")
+                        algorithm_results[algorithm][model_type] = None
 
-        # Calculate metrics
-        sales_metrics = self.calculate_metrics(y_test_sales, y_pred_sales, 'Sales')
-        cogs_metrics = self.calculate_metrics(y_test_cogs, y_pred_cogs, 'COGS')
-        volume_metrics = self.calculate_metrics(y_test_volume, y_pred_volume, 'Volume')
-
-        # Store results
-        self.test_results['holdout'] = {
-            'sales': sales_metrics,
-            'cogs': cogs_metrics,
-            'volume': volume_metrics,
+        # Store algorithm results
+        self.algorithm_results['holdout'] = {
+            'algorithm_results': algorithm_results,
             'test_data': test_df,
-            'test_volume_data': test_v_df,  # Store volume test data separately
-            'predictions': {
-                'sales': y_pred_sales,
-                'cogs': y_pred_cogs,
-                'volume': y_pred_volume
-            }
+            'test_volume_data': test_v_df
         }
 
-        # Print results
-        self.print_metrics_table(sales_metrics, cogs_metrics, volume_metrics, "HOLDOUT TEST")
+        # Print comparison table
+        self._print_algorithm_comparison_table(algorithm_results, "HOLDOUT TEST")
 
-        return sales_metrics, cogs_metrics, volume_metrics
+        return algorithm_results
+
+    def _print_algorithm_comparison_table(self, algorithm_results, title):
+        """Print formatted comparison table for all algorithms"""
+        print(f"\n📊 {title} - ALGORITHM COMPARISON:")
+        print("=" * 120)
+        print(f"{'Algorithm':<12} | {'Sales MAPE':<11} | {'Sales R²':<9} | {'COGS MAPE':<11} | {'COGS R²':<9} | {'Volume MAPE':<12} | {'Volume R²':<10}")
+        print("-" * 120)
+        
+        # Collect results for ranking
+        ranking_data = []
+        
+        for algorithm in ['xgboost', 'lightgbm', 'randomforest']:
+            if algorithm in algorithm_results:
+                row_data = [algorithm.upper()]
+                
+                # Sales metrics
+                if algorithm_results[algorithm].get('sales') and algorithm_results[algorithm]['sales'] is not None:
+                    sales_metrics = algorithm_results[algorithm]['sales']['metrics']
+                    row_data.extend([f"{sales_metrics['MAPE']:>9.2f}%", f"{sales_metrics['R2']:>7.3f}"])
+                    sales_mape = sales_metrics['MAPE']
+                    sales_r2 = sales_metrics['R2']
+                else:
+                    row_data.extend([f"{'N/A':>9}", f"{'N/A':>7}"])
+                    sales_mape = float('inf')
+                    sales_r2 = -1
+                
+                # COGS metrics
+                if algorithm_results[algorithm].get('cogs') and algorithm_results[algorithm]['cogs'] is not None:
+                    cogs_metrics = algorithm_results[algorithm]['cogs']['metrics']
+                    row_data.extend([f"{cogs_metrics['MAPE']:>9.2f}%", f"{cogs_metrics['R2']:>7.3f}"])
+                    cogs_mape = cogs_metrics['MAPE']
+                    cogs_r2 = cogs_metrics['R2']
+                else:
+                    row_data.extend([f"{'N/A':>9}", f"{'N/A':>7}"])
+                    cogs_mape = float('inf')
+                    cogs_r2 = -1
+                
+                # Volume metrics
+                if algorithm_results[algorithm].get('volume') and algorithm_results[algorithm]['volume'] is not None:
+                    volume_metrics = algorithm_results[algorithm]['volume']['metrics']
+                    row_data.extend([f"{volume_metrics['MAPE']:>10.2f}%", f"{volume_metrics['R2']:>8.3f}"])
+                    volume_mape = volume_metrics['MAPE']
+                    volume_r2 = volume_metrics['R2']
+                else:
+                    row_data.extend([f"{'N/A':>10}", f"{'N/A':>8}"])
+                    volume_mape = float('inf')
+                    volume_r2 = -1
+                
+                # Print row
+                print(" | ".join(row_data))
+                
+                # Store for ranking (average MAPE, higher R² is better)
+                avg_mape = np.mean([m for m in [sales_mape, cogs_mape, volume_mape] if m != float('inf')])
+                avg_r2 = np.mean([r for r in [sales_r2, cogs_r2, volume_r2] if r != -1])
+                ranking_data.append((algorithm, avg_mape, avg_r2))
+        
+        print("=" * 120)
+        
+        # Show algorithm ranking
+        if ranking_data:
+            print(f"\n🏆 ALGORITHM RANKING (by average MAPE - lower is better):")
+            ranking_data.sort(key=lambda x: x[1])  # Sort by average MAPE
+            for i, (algo, avg_mape, avg_r2) in enumerate(ranking_data, 1):
+                if avg_mape != float('inf'):
+                    print(f"  {i}. {algo.upper()}: Avg MAPE = {avg_mape:.2f}%, Avg R² = {avg_r2:.3f}")
+                else:
+                    print(f"  {i}. {algo.upper()}: No valid results")
+        print("=" * 120)
+
+    def test_holdout_accuracy(self, test_split_date='2024-01-01'):
+        """Test accuracy on holdout test set - MAIN MODEL ONLY (for backward compatibility)"""
+        print(f"\n=== MAIN MODEL HOLDOUT TEST ACCURACY (Test data from {test_split_date}) ===")
+
+        # Prepare data
+        df_prepared = self.prepare_features(self.df)
+        df_v_prepared = self.volume_features(self.df)
+        test_split_date = pd.to_datetime(test_split_date)
+
+        # Split data
+        test_df = df_prepared[df_prepared['Date'] >= test_split_date].copy()
+        test_v_df = df_v_prepared[df_v_prepared['Date'] >= test_split_date].copy()
+
+        if len(test_df) == 0 or len(test_v_df) == 0:
+            print("❌ No test data available for the specified date")
+            return
+
+        print(f"Test set size: {len(test_df)} records (Sales/COGS), {len(test_v_df)} records (Volume)")
+
+        # Prepare features and targets - use EXACT expected features
+        expected_sales_cogs_features = [
+            'Net_Sales_Volume_Litres', 'Marketing_Spend_EUR', 'Promotional_Event',
+            'Consumer_Confidence_Index', 'Inflation_Rate_EUR', 'Avg_Temp_C',
+            'Holiday_Indicator', 'Competitor_Activity_Index',
+            'day_of_week', 'month', 'year', 'day_of_year', 'week_of_year',
+            'Net_Sales_Revenue_EUR_lag1', 'COGS_EUR_lag1',
+            'Country', 'Channel', 'Product_Category'
+        ]
+        
+        expected_volume_features = [
+            'Marketing_Spend_EUR', 'Promotional_Event',
+            'Consumer_Confidence_Index', 'Inflation_Rate_EUR', 'Avg_Temp_C',
+            'Holiday_Indicator', 'Competitor_Activity_Index',
+            'day_of_week', 'month', 'year', 'day_of_year', 'week_of_year',
+            'Net_Sales_Volume_Litres_lag1',
+            'Country', 'Channel', 'Product_Category'
+        ]
+
+        X_test = test_df[expected_sales_cogs_features]
+        vX_test = test_v_df[expected_volume_features]
+
+        y_test_sales = test_df['Net_Sales_Revenue_EUR']
+        y_test_cogs = test_df['COGS_EUR']
+        y_test_volume = test_v_df['Net_Sales_Volume_Litres']
+
+        # Make predictions using main models
+        if self.sales_pipeline and self.cogs_pipeline and self.volume_pipeline:
+            y_pred_sales = self.sales_pipeline.predict(X_test)
+            y_pred_cogs = self.cogs_pipeline.predict(X_test)
+            y_pred_volume = self.volume_pipeline.predict(vX_test)
+
+            # Calculate metrics
+            sales_metrics = self.calculate_metrics(y_test_sales, y_pred_sales, 'Sales')
+            cogs_metrics = self.calculate_metrics(y_test_cogs, y_pred_cogs, 'COGS')
+            volume_metrics = self.calculate_metrics(y_test_volume, y_pred_volume, 'Volume')
+
+            # Store results
+            self.test_results['holdout'] = {
+                'sales': sales_metrics,
+                'cogs': cogs_metrics,
+                'volume': volume_metrics,
+                'test_data': test_df,
+                'test_volume_data': test_v_df,  # Store volume test data separately
+                'predictions': {
+                    'sales': y_pred_sales,
+                    'cogs': y_pred_cogs,
+                    'volume': y_pred_volume
+                }
+            }
+
+            # Print results
+            self.print_metrics_table(sales_metrics, cogs_metrics, volume_metrics, "MAIN MODEL HOLDOUT TEST")
+
+            return sales_metrics, cogs_metrics, volume_metrics
+        else:
+            print("❌ Main models not loaded properly")
+            return None, None, None
 
     def test_rolling_window_accuracy(self, window_days=30, n_windows=5):
         """Test accuracy using rolling windows"""
@@ -522,45 +760,53 @@ class AccuracyTester:
         plt.show()
 
     def save_results_to_excel(self, filename=None):
-        """Save all test results to a comprehensive Excel file"""
+        """Save all test results to a comprehensive Excel file with multi-algorithm comparison"""
         if filename is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"AlcoBev_Model_Accuracy_Report_{timestamp}.xlsx"
+            filename = f"AlcoBev_MultiAlgorithm_Accuracy_Report_{timestamp}.xlsx"
 
-        print(f"\n💾 Saving results to Excel file: {filename}")
+        print(f"\n💾 Saving multi-algorithm results to Excel file: {filename}")
 
         # Create Excel writer object
         with pd.ExcelWriter(filename, engine='openpyxl') as writer:
-            # 1. Executive Summary Sheet
+            # 1. Executive Summary Sheet (enhanced with algorithm comparison)
             self._create_executive_summary_sheet(writer)
 
-            # 2. Holdout Test Results
+            # 2. NEW: Algorithm Comparison Sheet
+            if 'holdout' in self.algorithm_results:
+                self._create_algorithm_comparison_sheet(writer)
+
+            # 3. Holdout Test Results (main model)
             if 'holdout' in self.test_results:
                 self._create_holdout_test_sheet(writer)
 
-            # 3. Rolling Window Results
+            # 4. NEW: Detailed Algorithm Results
+            if 'holdout' in self.algorithm_results:
+                self._create_detailed_algorithm_results_sheet(writer)
+
+            # 5. Rolling Window Results
             if 'rolling' in self.test_results:
                 self._create_rolling_window_sheet(writer)
 
-            # 4. Segment Analysis Results
+            # 6. Segment Analysis Results
             if 'segments' in self.test_results:
                 self._create_segment_analysis_sheet(writer)
 
-            # 5. Detailed Predictions (if available)
+            # 7. Detailed Predictions (if available)
             if 'holdout' in self.test_results:
                 self._create_detailed_predictions_sheet(writer)
 
-            # 6. Model Information Sheet
+            # 8. Model Information Sheet (enhanced with all algorithms)
             self._create_model_info_sheet(writer)
 
         # Apply formatting to the Excel file
         self._format_excel_file(filename)
 
-        print(f"✅ Excel report saved successfully: {filename}")
+        print(f"✅ Multi-algorithm Excel report saved successfully: {filename}")
         return filename
 
     def _create_executive_summary_sheet(self, writer):
-        """Create executive summary sheet"""
+        """Create executive summary sheet with algorithm comparison"""
         summary_data = []
 
         # Test run information
@@ -568,11 +814,57 @@ class AccuracyTester:
         summary_data.append(['Report Generated', datetime.now().strftime("%Y-%m-%d %H:%M:%S"), '', ''])
         summary_data.append(['Data File', self.data_file, '', ''])
         summary_data.append(['Models Directory', self.models_dir, '', ''])
+        summary_data.append(['Report Type', 'Multi-Algorithm Comparison', '', ''])
         summary_data.append(['', '', '', ''])
 
-        # Overall accuracy metrics
+        # Algorithm loading status
+        summary_data.append(['Algorithm Loading Status', '', '', ''])
+        for algorithm in ['xgboost', 'lightgbm', 'randomforest']:
+            if algorithm in self.loaded_models:
+                loaded_count = sum(1 for model in self.loaded_models[algorithm].values() if model is not None)
+                summary_data.append([f'{algorithm.upper()}', f'{loaded_count}/3 models loaded', '', ''])
+        summary_data.append(['', '', '', ''])
+
+        # Algorithm comparison (if available)
+        if 'holdout' in self.algorithm_results:
+            algorithm_results = self.algorithm_results['holdout']['algorithm_results']
+            summary_data.append(['Algorithm Performance Comparison', '', '', ''])
+            summary_data.append(['Algorithm', 'Avg MAPE (%)', 'Avg R²', 'Ranking'])
+
+            # Calculate rankings
+            ranking_data = []
+            for algorithm in ['xgboost', 'lightgbm', 'randomforest']:
+                if algorithm in algorithm_results:
+                    mapes = []
+                    r2s = []
+                    
+                    for model_type in ['sales', 'cogs', 'volume']:
+                        if (algorithm_results[algorithm].get(model_type) and 
+                            algorithm_results[algorithm][model_type] is not None):
+                            metrics = algorithm_results[algorithm][model_type]['metrics']
+                            mapes.append(metrics['MAPE'])
+                            r2s.append(metrics['R2'])
+                    
+                    if mapes and r2s:
+                        avg_mape = np.mean(mapes)
+                        avg_r2 = np.mean(r2s)
+                        ranking_data.append((algorithm, avg_mape, avg_r2))
+
+            # Sort by MAPE and add to summary
+            ranking_data.sort(key=lambda x: x[1])
+            for i, (algo, avg_mape, avg_r2) in enumerate(ranking_data, 1):
+                ranking = f"#{i} {'(BEST)' if i == 1 else '(GOOD)' if i == 2 else ''}"
+                summary_data.append([
+                    algo.upper(), 
+                    f"{avg_mape:.2f}", 
+                    f"{avg_r2:.3f}", 
+                    ranking
+                ])
+            summary_data.append(['', '', '', ''])
+
+        # Overall accuracy metrics (main model - backward compatibility)
         if 'holdout' in self.test_results:
-            summary_data.append(['Overall Model Performance (Holdout Test)', '', '', ''])
+            summary_data.append(['Main Model Performance (XGBoost - Holdout Test)', '', '', ''])
             summary_data.append(['Metric', 'Sales Model', 'COGS Model', 'Volume Model'])
 
             sales_metrics = self.test_results['holdout']['sales']
@@ -588,7 +880,7 @@ class AccuracyTester:
             summary_data.append(['Within 20% Accuracy (%)', f"{sales_metrics['Accuracy_80']:.1f}", f"{cogs_metrics['Accuracy_80']:.1f}", f"{volume_metrics['Accuracy_80']:.1f}"])
             summary_data.append(['', '', '', ''])
 
-            # Model ratings
+            # Model ratings for main model
             def classify_accuracy(mape, r2):
                 if mape <= 5 and r2 >= 0.9:
                     return "EXCELLENT"
@@ -603,7 +895,7 @@ class AccuracyTester:
             cogs_rating = classify_accuracy(cogs_metrics['MAPE'], cogs_metrics['R2'])
             volume_rating = classify_accuracy(volume_metrics['MAPE'], volume_metrics['R2'])
 
-            summary_data.append(['Model Assessment', '', '', ''])
+            summary_data.append(['Main Model Assessment', '', '', ''])
             summary_data.append(['Sales Model Rating', sales_rating, '', ''])
             summary_data.append(['COGS Model Rating', cogs_rating, '', ''])
             summary_data.append(['Volume Model Rating', volume_rating, '', ''])
@@ -624,7 +916,7 @@ class AccuracyTester:
                 summary_data.append(['Volume R²', f"{rolling_volume['R2']:.3f}", '', ''])
                 summary_data.append(['', '', '', ''])
 
-            # Recommendations
+            # Recommendations (enhanced for multi-algorithm)
             summary_data.append(['Recommendations', '', '', ''])
             recommendations = self._generate_recommendations()
             for i, rec in enumerate(recommendations, 1):
@@ -633,6 +925,154 @@ class AccuracyTester:
         # Convert to DataFrame and save
         df_summary = pd.DataFrame(summary_data, columns=['Category', 'Value', 'Additional', 'Extra'])
         df_summary.to_excel(writer, sheet_name='Executive Summary', index=False)
+
+    def _create_algorithm_comparison_sheet(self, writer):
+        """Create algorithm comparison sheet"""
+        if 'holdout' not in self.algorithm_results:
+            return
+
+        algorithm_results = self.algorithm_results['holdout']['algorithm_results']
+        
+        # Create comparison data
+        comparison_data = []
+        comparison_data.append(['ALGORITHM PERFORMANCE COMPARISON', '', '', '', '', '', ''])
+        comparison_data.append(['', '', '', '', '', '', ''])
+        comparison_data.append(['Algorithm', 'Sales MAPE (%)', 'Sales R²', 'COGS MAPE (%)', 'COGS R²', 'Volume MAPE (%)', 'Volume R²'])
+
+        # Collect data for ranking
+        ranking_data = []
+
+        for algorithm in ['xgboost', 'lightgbm', 'randomforest']:
+            if algorithm in algorithm_results:
+                row_data = [algorithm.upper()]
+                
+                # Sales metrics
+                if algorithm_results[algorithm].get('sales') and algorithm_results[algorithm]['sales'] is not None:
+                    sales_metrics = algorithm_results[algorithm]['sales']['metrics']
+                    row_data.extend([f"{sales_metrics['MAPE']:.2f}", f"{sales_metrics['R2']:.4f}"])
+                    sales_mape = sales_metrics['MAPE']
+                    sales_r2 = sales_metrics['R2']
+                else:
+                    row_data.extend(['N/A', 'N/A'])
+                    sales_mape = float('inf')
+                    sales_r2 = -1
+                
+                # COGS metrics
+                if algorithm_results[algorithm].get('cogs') and algorithm_results[algorithm]['cogs'] is not None:
+                    cogs_metrics = algorithm_results[algorithm]['cogs']['metrics']
+                    row_data.extend([f"{cogs_metrics['MAPE']:.2f}", f"{cogs_metrics['R2']:.4f}"])
+                    cogs_mape = cogs_metrics['MAPE']
+                    cogs_r2 = cogs_metrics['R2']
+                else:
+                    row_data.extend(['N/A', 'N/A'])
+                    cogs_mape = float('inf')
+                    cogs_r2 = -1
+                
+                # Volume metrics
+                if algorithm_results[algorithm].get('volume') and algorithm_results[algorithm]['volume'] is not None:
+                    volume_metrics = algorithm_results[algorithm]['volume']['metrics']
+                    row_data.extend([f"{volume_metrics['MAPE']:.2f}", f"{volume_metrics['R2']:.4f}"])
+                    volume_mape = volume_metrics['MAPE']
+                    volume_r2 = volume_metrics['R2']
+                else:
+                    row_data.extend(['N/A', 'N/A'])
+                    volume_mape = float('inf')
+                    volume_r2 = -1
+
+                comparison_data.append(row_data)
+                
+                # Store for ranking
+                avg_mape = np.mean([m for m in [sales_mape, cogs_mape, volume_mape] if m != float('inf')])
+                avg_r2 = np.mean([r for r in [sales_r2, cogs_r2, volume_r2] if r != -1])
+                ranking_data.append((algorithm, avg_mape, avg_r2))
+
+        # Add ranking section
+        comparison_data.append(['', '', '', '', '', '', ''])
+        comparison_data.append(['ALGORITHM RANKING (by Avg MAPE)', '', '', '', '', '', ''])
+        comparison_data.append(['Rank', 'Algorithm', 'Avg MAPE (%)', 'Avg R²', 'Recommendation', '', ''])
+
+        # Sort by average MAPE
+        ranking_data.sort(key=lambda x: x[1])
+        for i, (algo, avg_mape, avg_r2) in enumerate(ranking_data, 1):
+            if avg_mape != float('inf'):
+                if i == 1:
+                    recommendation = "BEST - Use for production"
+                elif i == 2:
+                    recommendation = "GOOD - Alternative option"
+                else:
+                    recommendation = "FAIR - Consider improvements"
+                
+                comparison_data.append([
+                    str(i), 
+                    algo.upper(), 
+                    f"{avg_mape:.2f}", 
+                    f"{avg_r2:.4f}", 
+                    recommendation, 
+                    '', 
+                    ''
+                ])
+            else:
+                comparison_data.append([str(i), algo.upper(), 'No valid results', '', 'Check model training', '', ''])
+
+        # Convert to DataFrame and save
+        df_comparison = pd.DataFrame(comparison_data, columns=[
+            'Item', 'Value1', 'Value2', 'Value3', 'Value4', 'Value5', 'Value6'
+        ])
+        df_comparison.to_excel(writer, sheet_name='Algorithm Comparison', index=False)
+
+    def _create_detailed_algorithm_results_sheet(self, writer):
+        """Create detailed results for each algorithm"""
+        if 'holdout' not in self.algorithm_results:
+            return
+
+        algorithm_results = self.algorithm_results['holdout']['algorithm_results']
+        
+        # Create detailed metrics for each algorithm
+        detailed_data = []
+        detailed_data.append(['DETAILED ALGORITHM METRICS', '', '', ''])
+        detailed_data.append(['', '', '', ''])
+
+        for algorithm in ['xgboost', 'lightgbm', 'randomforest']:
+            if algorithm in algorithm_results:
+                detailed_data.append([f'{algorithm.upper()} ALGORITHM', '', '', ''])
+                detailed_data.append(['Metric', 'Sales Model', 'COGS Model', 'Volume Model'])
+
+                # Get metrics for each model type
+                sales_metrics = None
+                cogs_metrics = None
+                volume_metrics = None
+
+                if algorithm_results[algorithm].get('sales') and algorithm_results[algorithm]['sales'] is not None:
+                    sales_metrics = algorithm_results[algorithm]['sales']['metrics']
+                if algorithm_results[algorithm].get('cogs') and algorithm_results[algorithm]['cogs'] is not None:
+                    cogs_metrics = algorithm_results[algorithm]['cogs']['metrics']
+                if algorithm_results[algorithm].get('volume') and algorithm_results[algorithm]['volume'] is not None:
+                    volume_metrics = algorithm_results[algorithm]['volume']['metrics']
+
+                # Add metrics rows
+                if sales_metrics or cogs_metrics or volume_metrics:
+                    metrics_to_show = ['MAE', 'RMSE', 'MAPE', 'R2', 'Bias', 'Bias_Percentage', 'Accuracy_90', 'Accuracy_80']
+                    
+                    for metric in metrics_to_show:
+                        sales_val = f"{sales_metrics[metric]:,.2f}" if sales_metrics else "N/A"
+                        cogs_val = f"{cogs_metrics[metric]:,.2f}" if cogs_metrics else "N/A"
+                        volume_val = f"{volume_metrics[metric]:,.2f}" if volume_metrics else "N/A"
+                        
+                        # Format percentage metrics
+                        if metric in ['MAPE', 'Bias_Percentage', 'Accuracy_90', 'Accuracy_80']:
+                            if sales_metrics: sales_val = f"{sales_metrics[metric]:.2f}%"
+                            if cogs_metrics: cogs_val = f"{cogs_metrics[metric]:.2f}%"
+                            if volume_metrics: volume_val = f"{volume_metrics[metric]:.2f}%"
+                        
+                        detailed_data.append([metric, sales_val, cogs_val, volume_val])
+                else:
+                    detailed_data.append(['No valid results', 'N/A', 'N/A', 'N/A'])
+
+                detailed_data.append(['', '', '', ''])  # Empty row between algorithms
+
+        # Convert to DataFrame and save
+        df_detailed = pd.DataFrame(detailed_data, columns=['Metric', 'Sales', 'COGS', 'Volume'])
+        df_detailed.to_excel(writer, sheet_name='Detailed Algorithm Results', index=False)
 
     def _create_holdout_test_sheet(self, writer):
         """Create holdout test results sheet"""
@@ -968,7 +1408,7 @@ class AccuracyTester:
 
 
 def main():
-    """Main function to run all accuracy tests"""
+    """Main function to run all accuracy tests including multi-algorithm comparison"""
     tester = AccuracyTester()
 
     try:
@@ -976,28 +1416,39 @@ def main():
         tester.load_data_and_models()
 
         # Run all tests
-        print("\n🚀 Starting comprehensive accuracy testing...")
+        print("\n🚀 Starting comprehensive multi-algorithm accuracy testing...")
 
-        # 1. Holdout test accuracy
+        # 1. Main model holdout test (for backward compatibility)
         tester.test_holdout_accuracy()
 
-        # 2. Rolling window accuracy
+        # 2. NEW: Multi-algorithm holdout test
+        print("\n" + "="*60)
+        print("STARTING MULTI-ALGORITHM COMPARISON")
+        print("="*60)
+        tester.test_all_algorithms_holdout()
+
+        # 3. Rolling window accuracy (main model)
         tester.test_rolling_window_accuracy()
 
-        # 3. Segment-wise accuracy
+        # 4. Segment-wise accuracy (main model)
         tester.test_segment_accuracy()
 
-        # 4. Generate comprehensive report
+        # 5. Generate comprehensive report
         tester.generate_accuracy_report()
 
-        # 5. Create visualizations
+        # 6. Create visualizations
         tester.create_visualizations()
 
-        # 6. Save results to Excel
+        # 7. Save results to Excel (now includes algorithm comparison)
         excel_filename = tester.save_results_to_excel()
 
-        print(f"\n✅ Accuracy testing completed successfully!")
-        print(f"📊 Detailed results saved to: {excel_filename}")
+        print(f"\n✅ Multi-algorithm accuracy testing completed successfully!")
+        print(f"📊 Detailed results with algorithm comparison saved to: {excel_filename}")
+        print(f"\n🏆 Excel report now includes:")
+        print(f"   • Algorithm Comparison sheet")
+        print(f"   • Detailed Algorithm Results sheet")
+        print(f"   • Enhanced Executive Summary with rankings")
+        print(f"   • Side-by-side performance comparison")
 
         return excel_filename
 
