@@ -1,427 +1,283 @@
-# EY - Summer Internship 2025
-## Cash Flow Forecasting for AlcoBev
+# AlcoBev Cash Flow & Universal Dynamic Forecasting Engine
 
-## Index
-
-- [KPIs to Implement](#kpis-to-implement)
-  1. [Gross Profit (EUR)](#1-gross-profit-eur)
-  2. [Gross Profit Margin (%)](#2-gross-profit-margin-)
-  3. [Average Selling Price (ASP per Litre, EUR)](#3-average-selling-price-asp-per-litre-eur)
-  4. [COGS per Litre (EUR)](#4-cogs-per-litre-eur)
-  5. [Marketing Spend Ratio (%)](#5-marketing-spend-ratio-)
-  6. [Promotional Impact (%)](#6-promotional-impact-)
-  7. [Sales per Channel / Country / Product Category](#7-sales-per-channel--country--product-category)
-  8. [Holiday Sales Lift (%)](#8-holiday-sales-lift-)
-  9. [Competitor Sensitivity (%)](#9-competitor-sensitivity-)
-  10. [Macroeconomic Sensitivity (Inflation & Confidence Index)](#10-macroeconomic-sensitivity-inflation--confidence-index)
-  11. [Seasonality Impact (Temperature vs. Sales)](#11-seasonality-impact-temperature-vs-sales)
-  12. [Return on Marketing Investment (ROMI)](#12-return-on-marketing-investment-romi)
-  13. [Operating Cash Flow Proxy (EUR)](#13-operating-cash-flow-proxy-eur)
-- [Algos](#algos)
-  - [Ensemble Methods](#ensemble-methods-highly-recommended)
-    - [LightGBM](#1-lightgbm---best-overall-alternative)
-    - [CatBoost](#2-catboost---best-for-categorical-features)
-    - [Advanced Ensemble - Voting/Stacking](#3-advanced-ensemble---votingstacking)
-  - [Neural Network Approaches](#neural-network-approaches)
-    - [TabNet](#4-tabnet---deep-learning-for-tabular-data)
-    - [Time Series Specific: Prophet + ML Hybrid](#5-time-series-specific-prophet--ml-hybrid)
-  - [Recommended Implementation Strategy](#recommended-implementation-strategykey-improvements-in-this-advanced-pipeline)
-  - [Quick Implementation Tips](#quick-implementation-tips)
-  - [Installation Requirements](#installation-requirements)
-    - [Expected Performance Improvements](#expected-performance-improvements)
-- [Multi-Target Specialized Algorithms](#multi-target-specialized-algorithms)
-  - [Multi-Target XGBoost/LightGBM](#1-multi-target-xgboostlightgbm---top-choice)
-  - [Deep Multi-Task Neural Networks](#2-deep-multi-task-neural-networks---best-for-7-8-kpis)
-  - [Multi-Task CatBoost](#3-multi-task-catboost---handles-categorical-features-beautifully)
-  - [TOP 3 ALGORITHMS FOR 7-8 KPIs](#top-3-algorithms-for-7-8-kpis)
-
-## KPIs to Implement:
-### 1. **Gross Profit (EUR)**
-
-* **Formula**:
-
-  ```math
-  \text{Gross Profit} = \text{Net Sales Revenue (EUR)} - \text{COGS (EUR)}
-  ```
-* **Why Useful?** Shows how much money is left after covering the direct costs of goods.
-* **Implementation**: Simple subtraction.
+A full-stack forecasting & analytics platform delivering: data generation → model training → domain FastAPI with KPIs → Streamlit dashboard → accuracy reporting → PLUS a universal dynamic engine that can ingest ANY time‑series CSV and auto-train multi‑algorithm models.
 
 ---
+## High-Level Modules
 
-### 2. **Gross Profit Margin (%)**
-
-* **Formula**:
-
-  ```math
-  \text{Gross Profit Margin} = \frac{\text{Gross Profit}}{\text{Net Sales Revenue (EUR)}} \times 100
-  ```
-* **Why Useful?** Evaluates profitability efficiency.
-* **Implementation**: Division + percentage.
-
----
-
-### 3. **Average Selling Price (ASP per Litre, EUR)**
-
-* **Formula**:
-
-  ```math
-  \text{ASP} = \frac{\text{Net Sales Revenue (EUR)}}{\text{Net Sales Volume (Litres)}}
-  ``
-* **Why Useful?** Helps see pricing strategy effectiveness.
-* **Implementation**: Revenue ÷ Volume.
+| Module | Purpose | Tech | Key File(s) |
+|--------|---------|------|-------------|
+| AlcoBev Cashflow API | Domain forecasts (Sales, COGS, Volume) + KPIs + promo & holiday analytics | FastAPI, XGBoost | `Cashflow Forecasting/app.py` |
+| Model Training | Train & persist XGBoost pipelines | scikit-learn, XGBoost | `Cashflow Forecasting/train_models.py` |
+| Accuracy & Reporting | Holdout / rolling / segment metrics + Excel | openpyxl | `Cashflow Forecasting/testcase.py` |
+| Streamlit Dashboard | Enhanced KPI visualization (basic vs comprehensive) | Streamlit, Plotly | `frontend/streamlit_app.py` |
+| Dynamic Forecasting Engine | Universal feature detection & model selection | Custom | `dynamic_engine/dynamic_forecasting_engine.py` |
+| Dynamic API | Upload → Train → Predict → Forecast | FastAPI | `dynamic_engine/dynamic_api.py` |
+| Dynamic Dashboard (optional) | Generic dataset UI | Streamlit | `frontend/dynamic_dashboard.py` |
 
 ---
+ 
+## Repository Structure
 
-### 4. **COGS per Litre (EUR)**
+```text
+Cashflow Forecasting/
+    app.py                   # AlcoBev FastAPI (KPIs, promo/holiday logic)
+    train_models.py          # Trains sales/COGS/volume models
+    generate_data.py         # Synthetic data generator
+    testcase.py              # Accuracy tests & Excel report
+    requirements.txt         # Domain dependencies
+    alcobev_europe_sales_data.csv
+    models/                  # Saved pipelines (.pkl)
 
-* **Formula**:
+dynamic_engine/
+    dynamic_forecasting_engine.py  # Universal engine core
+    dynamic_api.py                 # Universal FastAPI service
+    demo_dynamic_engine.py         # Demo runner
+    demo_*.csv                     # Sample datasets (ecommerce, restaurant, stocks)
+    DYNAMIC_README.md              # Deep documentation
 
-  ```math
-  \text{COGS per Litre} = \frac{\text{COGS (EUR)}}{\text{Net Sales Volume (Litres)}}
-  ```
-* **Why Useful?** Reveals production/distribution efficiency.
-* **Implementation**: COGS ÷ Volume.
-
----
-
-### 5. **Marketing Spend Ratio (%)**
-
-* **Formula**:
-
-  ```math
-  \text{Marketing Spend Ratio} = \frac{\text{Marketing Spend (EUR)}}{\text{Net Sales Revenue (EUR)}} \times 100
-  ```
-* **Why Useful?** Tracks marketing efficiency relative to revenue.
-* **Implementation**: Spend ÷ Revenue.
-
----
-
-### 6. **Promotional Impact (%)**
-
-* **Formula**:
-  Compare **average sales during promotional events** vs. **non-promotional periods**:
-
-  ```math
-  \text{Impact} = \frac{\text{Avg. Promo Sales} - \text{Avg. Non-Promo Sales}}{\text{Avg. Non-Promo Sales}} \times 100
-  ```
-* **Why Useful?** Measures effectiveness of promotions.
-* **Implementation**: Group by `Promotional_Event`.
-
----
-
-### 7. **Sales per Channel / Country / Product Category**
-
-* **Formula**:
-  Aggregate `Net Sales Revenue` by each dimension.
-* **Why Useful?** Identifies best-performing markets/channels.
-* **Implementation**: `groupby` aggregations.
-
----
-
-### 8. **Holiday Sales Lift (%)**
-
-* **Formula**:
-
-  ```math
-  \text{Lift} = \frac{\text{Avg. Sales on Holidays} - \text{Avg. Sales on Normal Days}}{\text{Avg. Sales on Normal Days}} \times 100
-  ```
-* **Why Useful?** Shows effect of holidays on sales.
-* **Implementation**: Filter on `Holiday_Indicator`.
-
----
-
-### 9. **Competitor Sensitivity (%)**
-
-* **Formula**:
-  Correlation between `Competitor_Activity_Index` and `Net Sales Revenue`.
-* **Why Useful?** Measures how much competition impacts sales.
-* **Implementation**: Pearson correlation.
-
----
-
-### 10. **Macroeconomic Sensitivity (Inflation & Confidence Index)**
-
-* **Formula**:
-
-  * Correlation between `Inflation_Rate_EUR` and `Sales`.
-  * Correlation between `Consumer_Confidence_Index` and `Sales`.
-* **Why Useful?** Captures external drivers of demand.
-* **Implementation**: Correlation analysis.
-
----
-
-### 11. **Seasonality Impact (Temperature vs. Sales)**
-
-* **Formula**:
-  Correlation or regression between `Avg_Temp_C` and `Net Sales Volume`.
-* **Why Useful?** Detects demand patterns due to climate/season.
-* **Implementation**: Time-series correlation.
-
----
-
-### 12. **Return on Marketing Investment (ROMI)**
-
-* **Formula**:
-
-  ```math
-  \text{ROMI} = \frac{\text{Incremental Sales from Marketing}}{\text{Marketing Spend (EUR)}}
-  ```
-* **Why Useful?** Links marketing to real ROI.
-* **Implementation**: Compare with/without marketing periods.
-
----
-
-### 13. **Operating Cash Flow Proxy (EUR)**
-
-* Since we don’t have full financials (tax, depreciation, working capital), we approximate:
-
-  ```math
-  \text{OCF} \approx \text{Gross Profit} - \text{Marketing Spend (EUR)}
-  ```
-* **Why Useful?** Provides a simplified cash flow view.
-* **Implementation**: Derived KPI.
-
-
-## Algos
-Looking at your ML pipeline, I can suggest several advanced algorithms that could potentially improve performance over XGBRegressor. Here are the top recommendations:
-
-### **Ensemble Methods (Highly Recommended)**
-
-#### 1. **LightGBM** - Best Overall Alternative
-```python
-from lightgbm import LGBMRegressor
-
-# Replace XGBRegressor with:
-LGBMRegressor(
-    random_state=42,
-    n_estimators=200,
-    learning_rate=0.05,
-    num_leaves=31,
-    feature_fraction=0.8,
-    bagging_fraction=0.8,
-    bagging_freq=5,
-    verbose=-1
-)
-```
-**Why LightGBM**: Faster training, lower memory usage, often better accuracy, excellent for time series with categorical features.
-
-#### 2. **CatBoost** - Best for Categorical Features
-```python
-from catboost import CatBoostRegressor
-
-CatBoostRegressor(
-    random_seed=42,
-    iterations=200,
-    learning_rate=0.05,
-    depth=6,
-    cat_features=['Country', 'Channel', 'Product_Category'],  # No need for OneHotEncoder!
-    verbose=False
-)
-```
-**Why CatBoost**: Handles categorical features natively (no preprocessing needed), robust to overfitting, excellent for business forecasting.
-
-#### 3. **Advanced Ensemble - Voting/Stacking**
-```python
-from sklearn.ensemble import VotingRegressor, StackingRegressor
-from lightgbm import LGBMRegressor
-from catboost import CatBoostRegressor
-from sklearn.linear_model import Ridge
-
-# Voting Ensemble
-voting_regressor = VotingRegressor([
-    ('lgb', LGBMRegressor(random_state=42, n_estimators=100)),
-    ('cat', CatBoostRegressor(random_seed=42, iterations=100, verbose=False)),
-    ('xgb', XGBRegressor(random_state=42, n_estimators=100))
-])
-
-# Or Stacking Ensemble (more sophisticated)
-stacking_regressor = StackingRegressor(
-    estimators=[
-        ('lgb', LGBMRegressor(random_state=42)),
-        ('cat', CatBoostRegressor(random_seed=42, verbose=False)),
-        ('xgb', XGBRegressor(random_state=42))
-    ],
-    final_estimator=Ridge(alpha=1.0),
-    cv=5
-)
+frontend/
+    streamlit_app.py         # Domain dashboard
+    dynamic_dashboard.py     # Universal dashboard
 ```
 
-### **Neural Network Approaches**
+Note: Path contains a space (`Cashflow Forecasting/`)—quote in Windows commands.
 
-#### 4. **TabNet** - Deep Learning for Tabular Data
-```python
-# pip install pytorch-tabnet
-from pytorch_tabnet.tab_model import TabNetRegressor
+---
+ 
+## Architecture Overview
 
-TabNetRegressor(
-    n_d=32, n_a=32,
-    n_steps=5,
-    gamma=1.5,
-    n_independent=2, n_shared=2,
-    lambda_sparse=1e-4,
-    optimizer_fn=torch.optim.Adam,
-    optimizer_params=dict(lr=2e-2),
-    scheduler_params={"step_size":50, "gamma":0.9},
-    scheduler_fn=torch.optim.lr_scheduler.StepLR,
-    mask_type='entmax'
-)
+```text
+┌─────────────────────┐      /forecast (/comprehensive)      ┌──────────────────────┐
+│  Streamlit (Domain) │ ◄──────────────────────────────────► │  FastAPI Domain App  │
+└──────────┬──────────┘                                      └──────────┬───────────┘
+           │    uses models                                             │ loads models
+           ▼                                                            ▼
+        models/*.pkl     ◄──────────── train_models.py ◄────────   data (CSV)
+
+┌─────────────────────┐      /upload /train /predict /forecast ┌──────────────────────┐
+│ Dynamic Dashboard   │ ◄────────────────────────────────────► │ Dynamic API Engine   │
+└──────────┬──────────┘                                        └──────────┬───────────┘
+           │                                                              │
+           ▼                                                              ▼
+     dynamic_forecasting_engine.py (auto feature detection + model selection)
 ```
 
-#### 5. **Time Series Specific: Prophet + ML Hybrid**
-```python
-from prophet import Prophet
-import pandas as pd
+---
+ 
+## Feature Summary
 
-# For time series forecasting, combine Prophet trends with ML
-def prophet_ml_hybrid(df):
-    # Extract trend using Prophet
-    prophet_data = df[['Date', 'Net_Sales_Revenue_EUR']].rename(
-        columns={'Date': 'ds', 'Net_Sales_Revenue_EUR': 'y'}
-    )
-    
-    model = Prophet()
-    model.fit(prophet_data)
-    
-    # Get trend and seasonality components
-    forecast = model.predict(prophet_data)
-    df['trend'] = forecast['trend'].values
-    df['seasonal'] = forecast['seasonal'].values
-    
-    # Use these as features in your XGBoost/LightGBM
-    return df
+### Domain (AlcoBev) API
+
+* Predicts Sales Revenue, COGS, Volume
+* KPIs: Gross Profit, Margins, ASP, COGS/Litre, Marketing efficiency, Cash Flow
+* Promotional impact + Holiday lift
+* Segment breakdown (Country / Channel / Product)
+* Comprehensive vs Basic modes
+
+### Dynamic Universal Engine
+
+* Accept ANY CSV with at least one date/time column & numeric targets
+* Auto-detect numerical / categorical / date / potential targets
+* Time & lag feature enrichment
+* Multi-algorithm training (LightGBM, XGBoost, Random Forest) + best selection
+* Multi-target forecasting & future horizon generation
+* Session-based workflow (in-memory; pluggable to Redis/DB)
+
+---
+ 
+## Business KPIs (Domain)
+
+| KPI | Definition |
+|-----|------------|
+| Gross Profit (€) | Revenue − COGS |
+| Gross Profit Margin % | (Revenue − COGS)/Revenue |
+| ASP per Litre (€) | Revenue / Volume |
+| COGS per Litre (€) | COGS / Volume |
+| Operating Cash Flow (€) | Revenue − COGS − Marketing Spend |
+| Marketing Spend Ratio % | Marketing / Revenue |
+| Revenue per € Marketing | Revenue / Marketing |
+| Litres per € Marketing | Volume / Marketing |
+| Promotional Impact % | Promo vs non‑promo uplift |
+| Holiday Sales Lift % | Holiday vs baseline uplift |
+
+---
+ 
+## Environment Setup (Windows / PowerShell)
+
+```pwsh
+python -m venv cflow_ven
+./cflow_ven/Scripts/Activate.ps1
+pip install -r "Cashflow Forecasting/requirements.txt"
+pip install fastapi uvicorn lightgbm xgboost python-multipart streamlit plotly requests openpyxl
+```
+Python 3.11 used; 3.10+ expected compatible.
+
+---
+ 
+## Train Domain Models
+
+`train_models.py`:
+
+1. Loads dataset
+2. Builds time + lag features
+3. Trains XGBoost models (Sales, COGS, Volume)
+4. Saves pipelines to `models/`
+
+```pwsh
+python "Cashflow Forecasting/train_models.py"
 ```
 
-### **Recommended Implementation Strategy**## **Key Improvements in This Advanced Pipeline:**
+---
+ 
+## FastAPI Services
 
-1. **Multiple Algorithm Testing**: Automatically trains and compares 5 different approaches
-2. **Hyperparameter Optimization**: Better default parameters for each algorithm
-3. **Time Series Cross-Validation**: Uses `TimeSeriesSplit` for more realistic validation
-4. **Ensemble Methods**: Combines multiple models for better predictions
-5. **Automatic Model Selection**: Picks the best performing model based on validation scores
+### 1. Domain API (`app.py`)
 
-### **Quick Implementation Tips:**
+Run:
 
-1. **Start with LightGBM** - Usually gives the best performance/speed trade-off
-2. **Try CatBoost** - Excellent for your categorical features (Country, Channel, Product_Category)
-3. **Use Ensemble methods** if you have computational resources
-4. **Consider TabNet** for complex non-linear patterns (requires PyTorch)
+```pwsh
+cd "Cashflow Forecasting"
+uvicorn app:app --reload --port 8000
+```
+Endpoints:
 
-### **Installation Requirements:**
-```bash
-pip install lightgbm catboost pytorch-tabnet prophet
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | API info |
+| `/health` | GET | Health & model load status |
+| `/forecast` | POST | Basic list of daily forecasts |
+| `/forecast/comprehensive` | POST | Forecast + KPI + promo/holiday/segment summaries |
+| `/kpi/calculate` | GET | KPI calc for ad‑hoc inputs |
+| `/analytics/summary` | GET | Aggregated KPIs & impacts |
+
+Sample payload:
+
+```json
+{
+    "country": "Germany",
+    "channel": "Off-Trade",
+    "product_category": "Beer",
+    "start_date": "2025-09-19",
+    "end_date": "2025-10-18"
+}
+```
+PowerShell call:
+
+```pwsh
+Invoke-RestMethod -Uri http://127.0.0.1:8000/forecast/comprehensive -Method Post -ContentType 'application/json' -Body '{
+    "country":"Germany","channel":"Off-Trade","product_category":"Beer",
+    "start_date":"2025-09-19","end_date":"2025-10-18"
+}' | ConvertTo-Json -Depth 4
 ```
 
-### **Expected Performance Improvements:**
-- **LightGBM**: 10-15% better accuracy, 3x faster training
-- **CatBoost**: 15-20% better with categorical features
-- **Ensemble**: 20-25% improvement but slower inference
-- **TabNet**: Potentially 30%+ for complex patterns but requires more data
+### 2. Dynamic API (`dynamic_api.py`)
 
+Run on separate port:
 
-## **🎯 Multi-Target Specialized Algorithms**
-
-### 1. **Multi-Target XGBoost/LightGBM** - Top Choice
-```python
-from sklearn.multioutput import MultiOutputRegressor
-from lightgbm import LGBMRegressor
-
-# This gets BETTER with more targets due to shared learning
-multi_target_lgb = MultiOutputRegressor(
-    LGBMRegressor(
-        n_estimators=300,  # Increase for more targets
-        learning_rate=0.03,  # Slower learning for stability
-        num_leaves=31,
-        feature_fraction=0.9,  # Higher for multi-target
-        bagging_fraction=0.9,
-        min_child_samples=50,  # More conservative
-        reg_alpha=0.1,
-        reg_lambda=0.2,
-        random_state=42
-    )
-)
-
-# Usage: Fit on all 7-8 targets at once
-# y_multi = df[['KPI1', 'KPI2', 'KPI3', 'KPI4', 'KPI5', 'KPI6', 'KPI7', 'KPI8']]
-# multi_target_lgb.fit(X_train, y_multi)
+```pwsh
+cd dynamic_engine
+uvicorn dynamic_api:app --reload --port 8001
 ```
+Workflow:
 
-### 2. **Deep Multi-Task Neural Networks** - BEST for 7-8 KPIs
-```python
-import tensorflow as tf
-from tensorflow.keras.layers import Dense, Dropout, BatchNormalization
-from tensorflow.keras.models import Model
-from tensorflow.keras.optimizers import Adam
+| Step | Endpoint | Method | Purpose |
+|------|----------|--------|---------|
+| 1 | `/upload` | POST (multipart) | Upload CSV & auto-detect schema |
+| 2 | `/train` | POST | Train selected target columns |
+| 3 | `/predict` | POST | Predictions for supplied rows |
+| 4 | `/forecast` | POST | Future horizon synthesis & forecast |
+| - | `/session/{id}/info` | GET | Session & model performance |
+| - | `/sessions` | GET | List active sessions |
+| - | `/analytics/summary` | GET | Global usage/profile stats |
+| - | `/health` | GET | API health |
 
-def create_multi_task_nn(input_dim, num_targets=8):
-    # Shared layers (this is where the magic happens with multiple KPIs)
-    inputs = tf.keras.Input(shape=(input_dim,))
-    
-    # Deep shared representation
-    shared = Dense(512, activation='relu')(inputs)
-    shared = BatchNormalization()(shared)
-    shared = Dropout(0.3)(shared)
-    
-    shared = Dense(256, activation='relu')(shared)
-    shared = BatchNormalization()(shared)
-    shared = Dropout(0.3)(shared)
-    
-    shared = Dense(128, activation='relu')(shared)
-    shared = BatchNormalization()(shared)
-    shared = Dropout(0.2)(shared)
-    
-    # Task-specific heads for each KPI
-    outputs = []
-    kpi_names = ['Sales', 'COGS', 'Margin', 'Volume', 'Market_Share', 'Customer_Acquisition', 'Retention', 'ROI']
-    
-    for i, kpi_name in enumerate(kpi_names[:num_targets]):
-        # Each KPI gets its own specialized layers
-        task_specific = Dense(64, activation='relu', name=f'{kpi_name}_dense1')(shared)
-        task_specific = Dropout(0.2)(task_specific)
-        task_specific = Dense(32, activation='relu', name=f'{kpi_name}_dense2')(task_specific)
-        output = Dense(1, activation='linear', name=f'{kpi_name}_output')(task_specific)
-        outputs.append(output)
-    
-    model = Model(inputs=inputs, outputs=outputs)
-    
-    # Multi-task loss with different weights for different KPIs
-    losses = {f'{kpi_names[i]}_output': 'mse' for i in range(num_targets)}
-    loss_weights = {f'{kpi_names[i]}_output': 1.0 for i in range(num_targets)}  # Adjust based on importance
-    
-    model.compile(
-        optimizer=Adam(learning_rate=0.001),
-        loss=losses,
-        loss_weights=loss_weights,
-        metrics=['mae']
-    )
-    
-    return model
+Examples:
+
+```pwsh
+# Upload
+Invoke-RestMethod -Uri http://127.0.0.1:8001/upload -Method Post -Form @{ file = Get-Item ..\demo_ecommerce_data.csv }
+
+# Train
+Invoke-RestMethod -Uri http://127.0.0.1:8001/train -Method Post -ContentType 'application/json' -Body '{
+    "session_id":"<SESSION>","target_columns":["daily_sales"],"test_size":0.2
+}' | ConvertTo-Json -Depth 6
+
+# Forecast
+Invoke-RestMethod -Uri http://127.0.0.1:8001/forecast -Method Post -ContentType 'application/json' -Body '{
+    "session_id":"<SESSION>","forecast_days":30,
+    "base_values":{"region":"North","marketing_spend":1000}
+}' | ConvertTo-Json -Depth 6
 ```
+See `dynamic_engine/DYNAMIC_README.md` for in-depth docs.
 
-### 3. **Multi-Task CatBoost** - Handles Categorical Features Beautifully
-```python
-from catboost import CatBoostRegressor
-from sklearn.multioutput import MultiOutputRegressor
+---
+ 
+## Streamlit Dashboards
 
-multi_catboost = MultiOutputRegressor(
-    CatBoostRegressor(
-        iterations=500,  # More iterations for multiple targets
-        learning_rate=0.03,
-        depth=8,  # Deeper for complex multi-target relationships
-        l2_leaf_reg=5,
-        bootstrap_type='Bayesian',
-        bagging_temperature=1,
-        od_type='Iter',
-        od_wait=100,
-        random_seed=42,
-        verbose=False,
-        # CatBoost handles categorical features natively
-        cat_features=['Country', 'Channel', 'Product_Category']
-    )
-)
+### Domain Dashboard
+
+```pwsh
+streamlit run frontend/streamlit_app.py
 ```
+Features: parameter sidebar, KPI cards, multi-panel Plotly (Revenue, Gross Profit, Volume, Cash Flow, Margin %, ASP), promo & holiday analysis, segment summaries.
 
-### **TOP 3 ALGORITHMS FOR 7-8 KPIs:**
+### Dynamic Dashboard (optional)
 
-1. **Multi-Task Neural Network** (60-80% improvement with more KPIs)
-2. **Multi-Target LightGBM** (30-50% improvement) 
-3. **Multi-Target CatBoost** (40-60% improvement)
+```pwsh
+streamlit run frontend/dynamic_dashboard.py
+```
+Upload → train → forecast for arbitrary datasets.
+
+---
+ 
+## Accuracy & Reporting (`testcase.py`)
+
+Provides:
+
+* Holdout metrics (MAE, RMSE, R², MAPE, bias, % within 10% / 20%)
+* Rolling window evaluation
+* Segment-wise accuracy (Country / Channel / Product)
+* Styled multi-sheet Excel report
+
+Run:
+
+```pwsh
+python "Cashflow Forecasting/testcase.py"
+```
+Outputs: `AlcoBev_Model_Accuracy_Report_YYYYMMDD_HHMMSS.xlsx`.
+
+---
+ 
+## Basic vs Comprehensive (Domain UI)
+
+| Mode | Output |
+|------|--------|
+| Basic | Daily forecast rows only |
+| Comprehensive | Daily rows + aggregated totals, averages, promo/holiday lift, segment breakdown, performance highlights |
+
+---
+ 
+## Extensibility
+
+| Goal | Change Location |
+|------|-----------------|
+| Add KPI | KPI aggregation logic in `app.py` (summary creation) |
+| New algorithm (dynamic engine) | Extend training loop in `dynamic_forecasting_engine.py` |
+| Feature engineering | `create_time_features` + engine prep methods |
+| New segment dimension | Adjust Pydantic models + summary builders |
+| Persist sessions | Replace in-memory `active_engines` with DB/Redis |
+
+---
+ 
+## Quick Test
+
+1. `python Cashflow Forecasting/train_models.py`
+2. Start domain API → `/health`
+3. POST `/forecast/comprehensive` → verify KPI fields
+4. Launch Streamlit domain dashboard
+5. Start dynamic API (port 8001)
+6. Upload demo CSV → train → forecast
+7. Run `testcase.py` → confirm Excel report
+
+---
